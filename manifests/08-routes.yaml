@@ -1,0 +1,223 @@
+---
+# MCP Fetch Route
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-fetch-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /mcp/fetch
+    backendRefs:
+    - name: mcp-fetch-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend
+---
+# MCP Time Route
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-time-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /mcp/time
+    backendRefs:
+    - name: mcp-time-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend
+---
+# MCP Prompts Route
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-prompts-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /mcp/prompts
+    backendRefs:
+    - name: mcp-prompts-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend
+---
+# Azure OpenAI Route
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: azure-llm-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /azure
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /v1/chat/completions
+    backendRefs:
+    - name: azure-openai-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend
+---
+# Gemini Route
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gemini-llm-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /gemini
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /v1/chat/completions
+    backendRefs:
+    - name: gemini-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend
+---
+# Dynamic Agent Route
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dynamic-agent-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /dynamic
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /
+    backendRefs:
+    - name: dynamic-agent-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend
+---
+# A2A Research Agent Route (direct to A2A service)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: a2a-research-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /a2a/research
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /
+    backendRefs:
+    - name: a2a-research-agent
+      namespace: ai-agents
+      port: 9090
+---
+# A2A Coding Agent Route (direct to A2A service)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: a2a-coding-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /a2a/coding
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /
+    backendRefs:
+    - name: a2a-coding-agent
+      namespace: ai-agents
+      port: 9090
+---
+# A2A Orchestrator Route
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: a2a-orchestrator-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /a2a
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /
+    backendRefs:
+    - name: a2a-orchestrator-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend

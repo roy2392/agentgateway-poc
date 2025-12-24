@@ -1,0 +1,165 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-prompts
+  namespace: ai-agents
+  labels:
+    app: mcp-prompts
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-prompts
+  template:
+    metadata:
+      labels:
+        app: mcp-prompts
+    spec:
+      containers:
+      - name: mcp-prompts
+        image: python:3.11-slim
+        command: ["python3", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "flask", "-q"])
+
+          from flask import Flask, request, jsonify
+
+          app = Flask(__name__)
+
+          PROMPTS = {
+              "research-agent": {
+                  "name": "Research Agent",
+                  "description": "An agent specialized in research and information gathering",
+                  "system_prompt": "You are a Research Agent specialized in gathering and analyzing information. Your capabilities include searching and retrieving information from various sources, analyzing and summarizing complex topics, providing well-structured factual responses, and citing sources when available. Guidelines: Always verify information before presenting it, be objective and present multiple perspectives when relevant, clearly distinguish between facts and opinions, and ask clarifying questions when the request is ambiguous. You have access to MCP tools for fetching web content and getting time information.",
+                  "version": "1.0",
+                  "tags": ["research", "analysis", "information"]
+              },
+              "coding-agent": {
+                  "name": "Coding Agent",
+                  "description": "An agent specialized in software development",
+                  "system_prompt": "You are a Coding Agent specialized in software development and programming. Your capabilities include writing clean, efficient, and well-documented code, debugging and troubleshooting code issues, explaining complex programming concepts, reviewing code and suggesting improvements, and supporting multiple programming languages. Guidelines: Follow best practices and coding standards, write secure code and avoid common vulnerabilities, provide explanations with code examples, consider performance and scalability, and use appropriate design patterns.",
+                  "version": "1.0",
+                  "tags": ["coding", "development", "programming"]
+              },
+              "customer-support-agent": {
+                  "name": "Customer Support Agent",
+                  "description": "An agent for handling customer inquiries",
+                  "system_prompt": "You are a Customer Support Agent dedicated to helping customers with their inquiries. Your capabilities include answering product and service questions, troubleshooting common issues, guiding customers through processes, and escalating complex issues appropriately. Guidelines: Be friendly, patient, and professional, acknowledge customer frustrations empathetically, provide clear step-by-step instructions, follow up to ensure issues are resolved, and never share sensitive customer data.",
+                  "version": "1.0",
+                  "tags": ["support", "customer-service", "help"]
+              },
+              "data-analyst-agent": {
+                  "name": "Data Analyst Agent",
+                  "description": "An agent specialized in data analysis",
+                  "system_prompt": "You are a Data Analyst Agent specialized in analyzing and interpreting data. Your capabilities include analyzing datasets and identifying patterns, creating visualizations and reports, performing statistical analysis, generating insights and recommendations, and writing SQL queries and data processing scripts. Guidelines: Validate data quality before analysis, use appropriate statistical methods, present findings clearly with visualizations, acknowledge limitations and uncertainties, and provide actionable recommendations.",
+                  "version": "1.0",
+                  "tags": ["data", "analytics", "statistics"]
+              }
+          }
+
+          TOOLS = [
+              {
+                  "name": "get_prompt",
+                  "description": "Get the system prompt for a specific agent by ID",
+                  "inputSchema": {
+                      "type": "object",
+                      "properties": {
+                          "agent_id": {
+                              "type": "string",
+                              "description": "The agent ID (e.g., research-agent, coding-agent)"
+                          }
+                      },
+                      "required": ["agent_id"]
+                  }
+              },
+              {
+                  "name": "list_prompts",
+                  "description": "List all available agent prompts",
+                  "inputSchema": {"type": "object", "properties": {}}
+              },
+              {
+                  "name": "search_prompts",
+                  "description": "Search prompts by tag or keyword",
+                  "inputSchema": {
+                      "type": "object",
+                      "properties": {
+                          "query": {"type": "string", "description": "Search query"}
+                      },
+                      "required": ["query"]
+                  }
+              }
+          ]
+
+          @app.route('/health')
+          def health():
+              return jsonify({"status": "healthy", "prompts_count": len(PROMPTS)})
+
+          @app.route('/mcp/v1/tools')
+          def list_tools():
+              return jsonify({"tools": TOOLS})
+
+          @app.route('/mcp/v1/tools/call', methods=['POST'])
+          def call_tool():
+              data = request.json
+              tool_name = data.get('name')
+              args = data.get('arguments', {})
+
+              if tool_name == 'get_prompt':
+                  agent_id = args.get('agent_id', '').lower().replace(' ', '-')
+                  if agent_id in PROMPTS:
+                      return jsonify({"result": {"agent_id": agent_id, "system_prompt": PROMPTS[agent_id]["system_prompt"]}})
+                  return jsonify({"error": f"Prompt not found: {agent_id}"}), 404
+
+              elif tool_name == 'list_prompts':
+                  return jsonify({"result": {"prompts": [{"agent_id": k, "name": v["name"], "description": v["description"]} for k, v in PROMPTS.items()]}})
+
+              elif tool_name == 'search_prompts':
+                  query = args.get('query', '').lower()
+                  results = [{"agent_id": k, "name": v["name"]} for k, v in PROMPTS.items() if query in k or query in v["name"].lower() or any(query in t for t in v["tags"])]
+                  return jsonify({"result": {"matches": results}})
+
+              return jsonify({"error": f"Unknown tool: {tool_name}"}), 404
+
+          @app.route('/prompts')
+          def api_list():
+              return jsonify({"prompts": [{"agent_id": k, "name": v["name"]} for k, v in PROMPTS.items()]})
+
+          @app.route('/prompts/<agent_id>')
+          def api_get(agent_id):
+              if agent_id in PROMPTS:
+                  return jsonify(PROMPTS[agent_id])
+              return jsonify({"error": "Not found"}), 404
+
+          app.run(host='0.0.0.0', port=8000)
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-prompts
+  namespace: ai-agents
+  labels:
+    app: mcp-prompts
+spec:
+  selector:
+    app: mcp-prompts
+  ports:
+  - port: 80
+    targetPort: 8000
+    appProtocol: kgateway.dev/mcp

@@ -1,0 +1,212 @@
+---
+# Azure OpenAI Proxy
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azure-proxy
+  namespace: ai-agents
+  labels:
+    app: azure-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: azure-proxy
+  template:
+    metadata:
+      labels:
+        app: azure-proxy
+    spec:
+      containers:
+      - name: azure-proxy
+        image: python:3.11-slim
+        command: ["python3", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "flask", "requests", "-q"])
+          from flask import Flask, request, Response
+          import requests
+          import os
+
+          app = Flask(__name__)
+
+          AZURE_ENDPOINT = os.environ.get('AZURE_ENDPOINT', '')
+          API_KEY = os.environ.get('AZURE_API_KEY', '')
+          DEPLOYMENT = os.environ.get('AZURE_DEPLOYMENT', 'gpt-4o')
+
+          @app.route('/health')
+          def health():
+              return {"status": "healthy"}
+
+          @app.route('/v1/chat/completions', methods=['POST'])
+          def chat():
+              url = f"{AZURE_ENDPOINT}/openai/deployments/{DEPLOYMENT}/chat/completions?api-version=2024-10-21"
+              resp = requests.post(url, json=request.json, headers={"Content-Type": "application/json", "api-key": API_KEY})
+              return Response(resp.content, status=resp.status_code, content_type='application/json')
+
+          @app.route('/v1/models')
+          def models():
+              return {"object": "list", "data": [{"id": DEPLOYMENT, "object": "model", "owned_by": "azure"}]}
+
+          app.run(host='0.0.0.0', port=8080)
+        env:
+        - name: AZURE_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: llm-secrets
+              key: azure-endpoint
+        - name: AZURE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: llm-secrets
+              key: azure-api-key
+        - name: AZURE_DEPLOYMENT
+          valueFrom:
+            secretKeyRef:
+              name: llm-secrets
+              key: azure-deployment
+              optional: true
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: azure-proxy
+  namespace: ai-agents
+  labels:
+    app: azure-proxy
+spec:
+  selector:
+    app: azure-proxy
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+# Google Gemini Proxy
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gemini-proxy
+  namespace: ai-agents
+  labels:
+    app: gemini-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gemini-proxy
+  template:
+    metadata:
+      labels:
+        app: gemini-proxy
+    spec:
+      containers:
+      - name: gemini-proxy
+        image: python:3.11-slim
+        command: ["python3", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "flask", "requests", "-q"])
+          from flask import Flask, request, jsonify
+          import requests
+          import os
+
+          app = Flask(__name__)
+
+          API_KEY = os.environ.get('GEMINI_API_KEY', '')
+          GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+          @app.route('/health')
+          def health():
+              return {"status": "healthy"}
+
+          @app.route('/v1/chat/completions', methods=['POST'])
+          def chat():
+              data = request.json
+              messages = data.get('messages', [])
+              model = data.get('model', 'gemini-2.0-flash-exp')
+
+              contents = []
+              system = None
+              for msg in messages:
+                  if msg.get('role') == 'system':
+                      system = msg.get('content')
+                  elif msg.get('role') == 'assistant':
+                      contents.append({"role": "model", "parts": [{"text": msg.get('content', '')}]})
+                  else:
+                      contents.append({"role": "user", "parts": [{"text": msg.get('content', '')}]})
+
+              payload = {"contents": contents, "generationConfig": {"maxOutputTokens": data.get('max_tokens', 1024)}}
+              if system:
+                  payload["systemInstruction"] = {"parts": [{"text": system}]}
+
+              model_map = {"gemini-2.5-flash": "gemini-2.0-flash-exp", "gemini-flash": "gemini-2.0-flash-exp"}
+              gemini_model = model_map.get(model, "gemini-2.0-flash-exp")
+
+              resp = requests.post(f"{GEMINI_URL}/{gemini_model}:generateContent?key={API_KEY}", json=payload)
+              gemini_resp = resp.json()
+
+              content = ""
+              if 'candidates' in gemini_resp:
+                  parts = gemini_resp['candidates'][0].get('content', {}).get('parts', [])
+                  content = ''.join([p.get('text', '') for p in parts])
+
+              return jsonify({"id": "gemini", "object": "chat.completion", "model": gemini_model,
+                            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}]})
+
+          @app.route('/v1/models')
+          def models():
+              return {"object": "list", "data": [{"id": "gemini-2.5-flash", "object": "model", "owned_by": "google"}]}
+
+          app.run(host='0.0.0.0', port=8080)
+        env:
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: llm-secrets
+              key: gemini-api-key
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gemini-proxy
+  namespace: ai-agents
+  labels:
+    app: gemini-proxy
+spec:
+  selector:
+    app: gemini-proxy
+  ports:
+  - port: 80
+    targetPort: 8080

@@ -1,0 +1,639 @@
+---
+# ReferenceGrant to allow HTTPRoutes in kgateway-system to reference Services in ai-agents
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-kgateway-system
+  namespace: ai-agents
+spec:
+  from:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    namespace: kgateway-system
+  to:
+  - group: ""
+    kind: Service
+---
+# A2A Research Agent Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-research-agent
+  namespace: ai-agents
+  labels:
+    app: a2a-research-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2a-research-agent
+  template:
+    metadata:
+      labels:
+        app: a2a-research-agent
+    spec:
+      containers:
+      - name: a2a-agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        command: ["python", "-c"]
+        args:
+        - |
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+          import os
+
+          AGENT_CARD = {
+              "name": "Research Agent",
+              "description": "An AI research agent that can help with information gathering and analysis",
+              "url": f"http://a2a-research-agent.ai-agents.svc.cluster.local:9090",
+              "version": "1.0.0",
+              "capabilities": {
+                  "streaming": False,
+                  "pushNotifications": False,
+                  "stateTransitionHistory": False
+              },
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {
+                      "id": "research",
+                      "name": "Research",
+                      "description": "Research and gather information on any topic",
+                      "tags": ["research", "analysis", "information"]
+                  },
+                  {
+                      "id": "summarize",
+                      "name": "Summarize",
+                      "description": "Summarize long texts or documents",
+                      "tags": ["summary", "text", "analysis"]
+                  }
+              ]
+          }
+
+          class A2AHandler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args):
+                  print(f"[A2A Research] {args[0]}")
+
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json':
+                      self.send_json(AGENT_CARD)
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy"})
+                  else:
+                      self.send_json({"error": "Not found"}, 404)
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      request = {}
+
+                  if self.path == '/tasks/send':
+                      # Handle A2A task request
+                      task_id = request.get('id', 'task-001')
+                      message = request.get('message', {})
+                      parts = message.get('parts', [])
+
+                      user_text = ""
+                      for part in parts:
+                          if part.get('type') == 'text':
+                              user_text = part.get('text', '')
+                              break
+
+                      response = {
+                          "id": task_id,
+                          "sessionId": request.get('sessionId', 'session-001'),
+                          "status": {
+                              "state": "completed"
+                          },
+                          "artifacts": [
+                              {
+                                  "name": "response",
+                                  "parts": [
+                                      {
+                                          "type": "text",
+                                          "text": f"Research Agent received: '{user_text}'. I would research this topic and provide detailed information. This is a demo A2A agent."
+                                      }
+                                  ]
+                              }
+                          ]
+                      }
+                      self.send_json({"result": response})
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting A2A Research Agent on port 9090...")
+          HTTPServer(('', 9090), A2AHandler).serve_forever()
+---
+# A2A Research Agent Service with A2A protocol
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-research-agent
+  namespace: ai-agents
+spec:
+  selector:
+    app: a2a-research-agent
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# A2A Coding Agent Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-coding-agent
+  namespace: ai-agents
+  labels:
+    app: a2a-coding-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2a-coding-agent
+  template:
+    metadata:
+      labels:
+        app: a2a-coding-agent
+    spec:
+      containers:
+      - name: a2a-agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        command: ["python", "-c"]
+        args:
+        - |
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+
+          AGENT_CARD = {
+              "name": "Coding Agent",
+              "description": "An AI coding agent that helps with software development tasks",
+              "url": f"http://a2a-coding-agent.ai-agents.svc.cluster.local:9090",
+              "version": "1.0.0",
+              "capabilities": {
+                  "streaming": False,
+                  "pushNotifications": False,
+                  "stateTransitionHistory": False
+              },
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {
+                      "id": "code-review",
+                      "name": "Code Review",
+                      "description": "Review code for bugs and improvements",
+                      "tags": ["code", "review", "quality"]
+                  },
+                  {
+                      "id": "generate-code",
+                      "name": "Generate Code",
+                      "description": "Generate code snippets in various languages",
+                      "tags": ["code", "generation", "programming"]
+                  },
+                  {
+                      "id": "explain-code",
+                      "name": "Explain Code",
+                      "description": "Explain what a piece of code does",
+                      "tags": ["code", "explanation", "learning"]
+                  }
+              ]
+          }
+
+          class A2AHandler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args):
+                  print(f"[A2A Coding] {args[0]}")
+
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json':
+                      self.send_json(AGENT_CARD)
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy"})
+                  else:
+                      self.send_json({"error": "Not found"}, 404)
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      request = {}
+
+                  if self.path == '/tasks/send':
+                      task_id = request.get('id', 'task-001')
+                      message = request.get('message', {})
+                      parts = message.get('parts', [])
+
+                      user_text = ""
+                      for part in parts:
+                          if part.get('type') == 'text':
+                              user_text = part.get('text', '')
+                              break
+
+                      response = {
+                          "id": task_id,
+                          "sessionId": request.get('sessionId', 'session-001'),
+                          "status": {
+                              "state": "completed"
+                          },
+                          "artifacts": [
+                              {
+                                  "name": "response",
+                                  "parts": [
+                                      {
+                                          "type": "text",
+                                          "text": f"Coding Agent received: '{user_text}'. I would help you with coding tasks like code review, generation, or explanation. This is a demo A2A agent."
+                                      }
+                                  ]
+                              }
+                          ]
+                      }
+                      self.send_json({"result": response})
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting A2A Coding Agent on port 9090...")
+          HTTPServer(('', 9090), A2AHandler).serve_forever()
+---
+# A2A Coding Agent Service with A2A protocol
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-coding-agent
+  namespace: ai-agents
+spec:
+  selector:
+    app: a2a-coding-agent
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# A2A Customer Support Agent Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-support-agent
+  namespace: ai-agents
+  labels:
+    app: a2a-support-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2a-support-agent
+  template:
+    metadata:
+      labels:
+        app: a2a-support-agent
+    spec:
+      containers:
+      - name: a2a-agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        command: ["python", "-c"]
+        args:
+        - |
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+
+          AGENT_CARD = {
+              "name": "Customer Support Agent",
+              "description": "An AI customer support agent that helps with inquiries, issues, and account questions",
+              "url": "http://a2a-support-agent.ai-agents.svc.cluster.local:9090",
+              "version": "1.0.0",
+              "capabilities": {
+                  "streaming": False,
+                  "pushNotifications": False,
+                  "stateTransitionHistory": False
+              },
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {
+                      "id": "handle-complaint",
+                      "name": "Handle Complaints",
+                      "description": "Address customer complaints and issues",
+                      "tags": ["complaint", "issue", "problem", "support"]
+                  },
+                  {
+                      "id": "answer-questions",
+                      "name": "Answer Questions",
+                      "description": "Answer product and service questions",
+                      "tags": ["question", "help", "info", "how"]
+                  },
+                  {
+                      "id": "account-help",
+                      "name": "Account Help",
+                      "description": "Help with account-related issues",
+                      "tags": ["account", "billing", "subscription", "password"]
+                  }
+              ]
+          }
+
+          class A2AHandler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args):
+                  print(f"[A2A Support] {args[0]}")
+
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json':
+                      self.send_json(AGENT_CARD)
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy"})
+                  else:
+                      self.send_json({"error": "Not found"}, 404)
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      request = {}
+
+                  if self.path == '/tasks/send':
+                      task_id = request.get('id', 'task-001')
+                      message = request.get('message', {})
+                      parts = message.get('parts', [])
+
+                      user_text = ""
+                      for part in parts:
+                          if part.get('type') == 'text':
+                              user_text = part.get('text', '')
+                              break
+
+                      response = {
+                          "id": task_id,
+                          "sessionId": request.get('sessionId', 'session-001'),
+                          "status": {
+                              "state": "completed"
+                          },
+                          "artifacts": [
+                              {
+                                  "name": "response",
+                                  "parts": [
+                                      {
+                                          "type": "text",
+                                          "text": f"Customer Support Agent here! I received your message: '{user_text}'. I'm happy to help you with any questions, issues, or account-related concerns. How can I assist you today?"
+                                      }
+                                  ]
+                              }
+                          ]
+                      }
+                      self.send_json({"result": response})
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting A2A Customer Support Agent on port 9090...")
+          HTTPServer(('', 9090), A2AHandler).serve_forever()
+---
+# A2A Customer Support Agent Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-support-agent
+  namespace: ai-agents
+spec:
+  selector:
+    app: a2a-support-agent
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# Orchestrator Agent that can call other A2A agents
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-orchestrator
+  namespace: ai-agents
+  labels:
+    app: a2a-orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2a-orchestrator
+  template:
+    metadata:
+      labels:
+        app: a2a-orchestrator
+    spec:
+      containers:
+      - name: orchestrator
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8080
+        env:
+        - name: RESEARCH_AGENT_URL
+          value: "http://a2a-research-agent.ai-agents.svc.cluster.local:9090"
+        - name: CODING_AGENT_URL
+          value: "http://a2a-coding-agent.ai-agents.svc.cluster.local:9090"
+        - name: SUPPORT_AGENT_URL
+          value: "http://a2a-support-agent.ai-agents.svc.cluster.local:9090"
+        command: ["python", "-c"]
+        args:
+        - |
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+          import urllib.request
+          import os
+
+          RESEARCH_AGENT = os.environ.get('RESEARCH_AGENT_URL')
+          CODING_AGENT = os.environ.get('CODING_AGENT_URL')
+          SUPPORT_AGENT = os.environ.get('SUPPORT_AGENT_URL')
+
+          def call_a2a_agent(agent_url, message):
+              """Call an A2A agent and return its response"""
+              try:
+                  request_data = {
+                      "id": "task-from-orchestrator",
+                      "sessionId": "orchestrator-session",
+                      "message": {
+                          "role": "user",
+                          "parts": [{"type": "text", "text": message}]
+                      }
+                  }
+                  req = urllib.request.Request(
+                      f"{agent_url}/tasks/send",
+                      data=json.dumps(request_data).encode(),
+                      headers={'Content-Type': 'application/json'},
+                      method='POST'
+                  )
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      return json.loads(response.read().decode())
+              except Exception as e:
+                  return {"error": str(e)}
+
+          def get_agent_card(agent_url):
+              """Get agent card from A2A agent"""
+              try:
+                  req = urllib.request.Request(f"{agent_url}/.well-known/agent.json")
+                  with urllib.request.urlopen(req, timeout=10) as response:
+                      return json.loads(response.read().decode())
+              except Exception as e:
+                  return {"error": str(e)}
+
+          class OrchestratorHandler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args):
+                  print(f"[Orchestrator] {args[0]}")
+
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data, indent=2).encode())
+
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+
+              def do_GET(self):
+                  if self.path == '/agents':
+                      # List all available A2A agents
+                      agents = {
+                          "agents": [
+                              {
+                                  "name": "research",
+                                  "url": RESEARCH_AGENT,
+                                  "card": get_agent_card(RESEARCH_AGENT)
+                              },
+                              {
+                                  "name": "coding",
+                                  "url": CODING_AGENT,
+                                  "card": get_agent_card(CODING_AGENT)
+                              },
+                              {
+                                  "name": "support",
+                                  "url": SUPPORT_AGENT,
+                                  "card": get_agent_card(SUPPORT_AGENT)
+                              }
+                          ]
+                      }
+                      self.send_json(agents)
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy", "service": "orchestrator"})
+                  else:
+                      self.send_json({
+                          "service": "A2A Orchestrator",
+                          "endpoints": {
+                              "GET /agents": "List all available A2A agents",
+                              "POST /delegate": "Delegate task to specific agent",
+                              "POST /orchestrate": "Let orchestrator choose best agent"
+                          }
+                      })
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      self.send_json({"error": "Invalid JSON"}, 400)
+                      return
+
+                  if self.path == '/delegate':
+                      # Delegate to specific agent
+                      agent = request.get('agent', 'research')
+                      message = request.get('message', '')
+
+                      agent_url = RESEARCH_AGENT if agent == 'research' else CODING_AGENT
+                      result = call_a2a_agent(agent_url, message)
+
+                      self.send_json({
+                          "delegated_to": agent,
+                          "message": message,
+                          "response": result
+                      })
+
+                  elif self.path == '/orchestrate':
+                      # Orchestrator decides which agent to use
+                      message = request.get('message', '').lower()
+
+                      # Simple routing logic
+                      if any(word in message for word in ['code', 'program', 'function', 'bug', 'review', 'script', 'debug']):
+                          agent = 'coding'
+                          agent_url = CODING_AGENT
+                      elif any(word in message for word in ['help', 'support', 'issue', 'problem', 'complaint', 'refund', 'cancel', 'account', 'billing', 'password', 'subscription', 'customer']):
+                          agent = 'support'
+                          agent_url = SUPPORT_AGENT
+                      else:
+                          agent = 'research'
+                          agent_url = RESEARCH_AGENT
+
+                      result = call_a2a_agent(agent_url, request.get('message', ''))
+
+                      self.send_json({
+                          "orchestrated_to": agent,
+                          "reasoning": f"Routed to {agent} agent based on message content",
+                          "message": request.get('message', ''),
+                          "response": result
+                      })
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting A2A Orchestrator on port 8080...")
+          HTTPServer(('', 8080), OrchestratorHandler).serve_forever()
+---
+# Orchestrator Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-orchestrator
+  namespace: ai-agents
+spec:
+  selector:
+    app: a2a-orchestrator
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080

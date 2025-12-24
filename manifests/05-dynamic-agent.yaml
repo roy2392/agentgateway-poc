@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamic-agent
+  namespace: ai-agents
+  labels:
+    app: dynamic-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dynamic-agent
+  template:
+    metadata:
+      labels:
+        app: dynamic-agent
+    spec:
+      containers:
+      - name: dynamic-agent
+        image: python:3.11-slim
+        command: ["python3", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "flask", "requests", "-q"])
+
+          from flask import Flask, request, jsonify
+          import requests
+          import os
+
+          app = Flask(__name__)
+
+          MCP_PROMPTS_URL = "http://mcp-prompts.ai-agents.svc.cluster.local"
+          AZURE_LLM_URL = "http://azure-proxy.ai-agents.svc.cluster.local"
+          GEMINI_LLM_URL = "http://gemini-proxy.ai-agents.svc.cluster.local"
+
+          def get_system_prompt(agent_type):
+              try:
+                  resp = requests.get(f"{MCP_PROMPTS_URL}/prompts/{agent_type}")
+                  if resp.status_code == 200:
+                      return resp.json().get("system_prompt", "You are a helpful assistant.")
+              except Exception as e:
+                  print(f"Error fetching prompt: {e}")
+              return "You are a helpful assistant."
+
+          def call_llm(messages, provider="azure"):
+              url = AZURE_LLM_URL if provider == "azure" else GEMINI_LLM_URL
+              try:
+                  resp = requests.post(f"{url}/v1/chat/completions", json={
+                      "model": "gpt-4o" if provider == "azure" else "gemini-2.5-flash",
+                      "messages": messages,
+                      "max_tokens": 500
+                  })
+                  if resp.status_code == 200:
+                      return resp.json()["choices"][0]["message"]["content"]
+              except Exception as e:
+                  return f"LLM Error: {e}"
+              return "Sorry, I could not process your request."
+
+          @app.route('/health')
+          def health():
+              return jsonify({"status": "healthy", "agent": "dynamic-agent"})
+
+          @app.route('/.well-known/agent.json')
+          def agent_card():
+              return jsonify({
+                  "name": "Dynamic Agent",
+                  "description": "An agent that fetches its system prompt from MCP Prompts server",
+                  "version": "1.0.0",
+                  "capabilities": ["dynamic-prompts", "multi-llm", "chat"],
+                  "available_personas": ["research-agent", "coding-agent", "customer-support-agent", "data-analyst-agent"]
+              })
+
+          @app.route('/chat', methods=['POST'])
+          def chat():
+              data = request.json
+              message = data.get('message', '')
+              agent_type = data.get('agent_type', 'research-agent')
+              llm_provider = data.get('llm_provider', 'azure')
+
+              system_prompt = get_system_prompt(agent_type)
+
+              messages = [
+                  {"role": "system", "content": system_prompt},
+                  {"role": "user", "content": message}
+              ]
+
+              response = call_llm(messages, llm_provider)
+
+              return jsonify({
+                  "agent": "dynamic-agent",
+                  "persona": agent_type,
+                  "llm_provider": llm_provider,
+                  "system_prompt_source": "mcp-prompts",
+                  "response": response
+              })
+
+          @app.route('/prompts')
+          def list_prompts():
+              try:
+                  resp = requests.get(f"{MCP_PROMPTS_URL}/prompts")
+                  return resp.json()
+              except:
+                  return jsonify({"error": "Could not fetch prompts"})
+
+          app.run(host='0.0.0.0', port=8080)
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamic-agent
+  namespace: ai-agents
+  labels:
+    app: dynamic-agent
+spec:
+  selector:
+    app: dynamic-agent
+  ports:
+  - port: 80
+    targetPort: 8080

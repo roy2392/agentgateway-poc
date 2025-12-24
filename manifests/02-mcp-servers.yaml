@@ -1,0 +1,134 @@
+---
+# MCP Website Fetcher - Fetches and parses web content
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-fetch
+  namespace: ai-agents
+  labels:
+    app: mcp-fetch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-fetch
+  template:
+    metadata:
+      labels:
+        app: mcp-fetch
+    spec:
+      containers:
+      - name: mcp-fetch
+        image: ghcr.io/peterj/mcp-website-fetcher:main
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-fetch
+  namespace: ai-agents
+  labels:
+    app: mcp-fetch
+spec:
+  selector:
+    app: mcp-fetch
+  ports:
+  - port: 80
+    targetPort: 8000
+    appProtocol: kgateway.dev/mcp
+---
+# MCP Time Server - Provides current time tools
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-time
+  namespace: ai-agents
+  labels:
+    app: mcp-time
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-time
+  template:
+    metadata:
+      labels:
+        app: mcp-time
+    spec:
+      containers:
+      - name: mcp-time
+        image: python:3.11-slim
+        command: ["python3", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "flask", "pytz", "-q"])
+          from flask import Flask, request, jsonify
+          from datetime import datetime
+          import pytz
+
+          app = Flask(__name__)
+
+          TOOLS = [
+              {"name": "get_current_time", "description": "Get current time in a timezone", "inputSchema": {"type": "object", "properties": {"timezone": {"type": "string"}}}},
+              {"name": "list_timezones", "description": "List available timezones", "inputSchema": {"type": "object", "properties": {}}}
+          ]
+
+          @app.route('/health')
+          def health():
+              return jsonify({"status": "healthy"})
+
+          @app.route('/mcp/v1/tools')
+          def list_tools():
+              return jsonify({"tools": TOOLS})
+
+          @app.route('/mcp/v1/tools/call', methods=['POST'])
+          def call_tool():
+              data = request.json
+              if data.get('name') == 'get_current_time':
+                  tz = pytz.timezone(data.get('arguments', {}).get('timezone', 'UTC'))
+                  return jsonify({"result": {"time": datetime.now(tz).isoformat()}})
+              elif data.get('name') == 'list_timezones':
+                  return jsonify({"result": {"timezones": ['UTC', 'America/New_York', 'Europe/London', 'Asia/Tokyo']}})
+              return jsonify({"error": "Unknown tool"}), 404
+
+          app.run(host='0.0.0.0', port=8000)
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-time
+  namespace: ai-agents
+  labels:
+    app: mcp-time
+spec:
+  selector:
+    app: mcp-time
+  ports:
+  - port: 80
+    targetPort: 8000
+    appProtocol: kgateway.dev/mcp

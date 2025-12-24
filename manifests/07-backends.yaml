@@ -1,0 +1,100 @@
+---
+# MCP Fetch Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: mcp-fetch-backend
+  namespace: kgateway-system
+spec:
+  type: MCP
+  mcp:
+    targets:
+    - name: fetch-tool
+      static:
+        host: mcp-fetch.ai-agents.svc.cluster.local
+        port: 80
+        protocol: SSE
+---
+# MCP Time Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: mcp-time-backend
+  namespace: kgateway-system
+spec:
+  type: MCP
+  mcp:
+    targets:
+    - name: time-tool
+      static:
+        host: mcp-time.ai-agents.svc.cluster.local
+        port: 80
+        protocol: SSE
+---
+# MCP Prompts Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: mcp-prompts-backend
+  namespace: kgateway-system
+spec:
+  type: MCP
+  mcp:
+    targets:
+    - name: prompts
+      static:
+        host: mcp-prompts.ai-agents.svc.cluster.local
+        port: 80
+        protocol: SSE
+---
+# Azure OpenAI Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: azure-openai-backend
+  namespace: kgateway-system
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: azure-proxy.ai-agents.svc.cluster.local
+      port: 80
+---
+# Gemini Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: gemini-backend
+  namespace: kgateway-system
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: gemini-proxy.ai-agents.svc.cluster.local
+      port: 80
+---
+# Dynamic Agent Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: dynamic-agent-backend
+  namespace: kgateway-system
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: dynamic-agent.ai-agents.svc.cluster.local
+      port: 80
+---
+# A2A Orchestrator Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: a2a-orchestrator-backend
+  namespace: kgateway-system
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: a2a-orchestrator.ai-agents.svc.cluster.local
+      port: 80

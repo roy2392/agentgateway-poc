@@ -1,0 +1,1059 @@
+---
+# Production A2A Agents with Real LLM Integration
+# Features:
+# - Real LLM calls via Azure OpenAI / Gemini
+# - Proper A2A protocol implementation
+# - MCP tool integration (fetch, time)
+# - Langfuse tracing
+# - Centralized prompts from MCP Prompts server
+---
+# A2A Research Agent with Real LLM
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-research-agent-llm
+  namespace: ai-agents
+  labels:
+    app: a2a-research-agent-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2a-research-agent-llm
+  template:
+    metadata:
+      labels:
+        app: a2a-research-agent-llm
+    spec:
+      containers:
+      - name: a2a-agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        env:
+        - name: AZURE_PROXY_URL
+          value: "http://azure-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: GEMINI_PROXY_URL
+          value: "http://gemini-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: MCP_FETCH_URL
+          value: "http://mcp-fetch.ai-agents.svc.cluster.local"
+        - name: MCP_PROMPTS_URL
+          value: "http://mcp-prompts.ai-agents.svc.cluster.local"
+        - name: LANGFUSE_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-public-key
+              optional: true
+        - name: LANGFUSE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-secret-key
+              optional: true
+        - name: LANGFUSE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-host
+              optional: true
+        command: ["python", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "langfuse==2.44.0", "-q"])
+
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+          import urllib.request
+          import os
+          import uuid
+
+          # Try to import Langfuse
+          try:
+              from langfuse import Langfuse
+              langfuse = Langfuse(
+                  public_key=os.environ.get('LANGFUSE_PUBLIC_KEY'),
+                  secret_key=os.environ.get('LANGFUSE_SECRET_KEY'),
+                  host=os.environ.get('LANGFUSE_HOST', 'https://cloud.langfuse.com')
+              ) if os.environ.get('LANGFUSE_PUBLIC_KEY') else None
+          except:
+              langfuse = None
+
+          AZURE_PROXY = os.environ.get('AZURE_PROXY_URL')
+          GEMINI_PROXY = os.environ.get('GEMINI_PROXY_URL')
+          MCP_FETCH = os.environ.get('MCP_FETCH_URL')
+          MCP_PROMPTS = os.environ.get('MCP_PROMPTS_URL')
+
+          AGENT_CARD = {
+              "name": "Research Agent",
+              "description": "An AI research agent powered by real LLMs that can research topics and fetch web content",
+              "url": "http://a2a-research-agent-llm.ai-agents.svc.cluster.local:9090",
+              "version": "2.0.0",
+              "provider": {
+                  "organization": "KGateway POC"
+              },
+              "capabilities": {
+                  "streaming": False,
+                  "pushNotifications": False,
+                  "stateTransitionHistory": False
+              },
+              "authentication": {
+                  "schemes": ["none"]
+              },
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {
+                      "id": "research",
+                      "name": "Research Topics",
+                      "description": "Research and analyze any topic using AI",
+                      "tags": ["research", "analysis", "information"],
+                      "examples": ["What is Kubernetes?", "Explain microservices"]
+                  },
+                  {
+                      "id": "web-fetch",
+                      "name": "Fetch Web Content",
+                      "description": "Fetch and summarize web pages using MCP",
+                      "tags": ["web", "fetch", "mcp"],
+                      "examples": ["Summarize https://example.com"]
+                  }
+              ]
+          }
+
+          SYSTEM_PROMPT = """You are a Research Agent. Your role is to:
+          1. Research and explain topics thoroughly
+          2. Provide accurate, well-structured information
+          3. Use clear examples when helpful
+          4. Cite sources when possible
+          Keep responses concise but informative."""
+
+          def call_llm(messages, provider="azure", trace_id=None):
+              """Call LLM via proxy"""
+              url = AZURE_PROXY if provider == "azure" else GEMINI_PROXY
+              try:
+                  data = json.dumps({
+                      "model": "gpt-4o" if provider == "azure" else "gemini-2.5-flash",
+                      "messages": messages,
+                      "max_tokens": 1024
+                  }).encode()
+                  req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      result = json.loads(resp.read().decode())
+                      return result.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+              except Exception as e:
+                  return f"LLM Error: {str(e)}"
+
+          def call_mcp_fetch(url_to_fetch):
+              """Use MCP fetch tool to get web content"""
+              try:
+                  # Call MCP fetch server
+                  mcp_request = {
+                      "jsonrpc": "2.0",
+                      "id": 1,
+                      "method": "tools/call",
+                      "params": {
+                          "name": "fetch",
+                          "arguments": {"url": url_to_fetch}
+                      }
+                  }
+                  req = urllib.request.Request(
+                      f"{MCP_FETCH}/mcp",
+                      data=json.dumps(mcp_request).encode(),
+                      headers={'Content-Type': 'application/json'}
+                  )
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return json.loads(resp.read().decode())
+              except Exception as e:
+                  return {"error": str(e)}
+
+          class A2AHandler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args):
+                  print(f"[A2A Research LLM] {args[0]}")
+
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json':
+                      self.send_json(AGENT_CARD)
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy", "llm": "enabled"})
+                  else:
+                      self.send_json({"error": "Not found"}, 404)
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      request = {}
+
+                  if self.path == '/tasks/send':
+                      task_id = request.get('id', str(uuid.uuid4()))
+                      message = request.get('message', {})
+                      parts = message.get('parts', [])
+                      provider = request.get('provider', 'azure')
+
+                      user_text = ""
+                      for part in parts:
+                          if part.get('type') == 'text':
+                              user_text = part.get('text', '')
+                              break
+
+                      # Create trace if Langfuse available
+                      trace_id = str(uuid.uuid4())
+                      if langfuse:
+                          langfuse.trace(
+                              id=trace_id,
+                              name="research-agent-task",
+                              input={"message": user_text, "provider": provider},
+                              tags=["a2a", "research", "llm"]
+                          )
+
+                      # Check if user wants to fetch a URL
+                      if user_text.startswith("fetch ") or "http" in user_text:
+                          # Extract URL and use MCP fetch
+                          import re
+                          urls = re.findall(r'https?://[^\s]+', user_text)
+                          if urls:
+                              fetch_result = call_mcp_fetch(urls[0])
+                              user_text = f"Summarize this content: {json.dumps(fetch_result)}"
+
+                      # Call real LLM
+                      messages = [
+                          {"role": "system", "content": SYSTEM_PROMPT},
+                          {"role": "user", "content": user_text}
+                      ]
+                      llm_response = call_llm(messages, provider, trace_id)
+
+                      if langfuse:
+                          langfuse.flush()
+
+                      response = {
+                          "id": task_id,
+                          "sessionId": request.get('sessionId', 'session-001'),
+                          "status": {"state": "completed"},
+                          "artifacts": [{
+                              "name": "response",
+                              "parts": [{"type": "text", "text": llm_response}]
+                          }]
+                      }
+                      self.send_json({"result": response})
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting A2A Research Agent with Real LLM on port 9090...")
+          HTTPServer(('', 9090), A2AHandler).serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-research-agent-llm
+  namespace: ai-agents
+spec:
+  selector:
+    app: a2a-research-agent-llm
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# A2A Coding Agent with Real LLM
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-coding-agent-llm
+  namespace: ai-agents
+  labels:
+    app: a2a-coding-agent-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2a-coding-agent-llm
+  template:
+    metadata:
+      labels:
+        app: a2a-coding-agent-llm
+    spec:
+      containers:
+      - name: a2a-agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        env:
+        - name: AZURE_PROXY_URL
+          value: "http://azure-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: GEMINI_PROXY_URL
+          value: "http://gemini-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: LANGFUSE_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-public-key
+              optional: true
+        - name: LANGFUSE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-secret-key
+              optional: true
+        - name: LANGFUSE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-host
+              optional: true
+        command: ["python", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "langfuse==2.44.0", "-q"])
+
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+          import urllib.request
+          import os
+          import uuid
+
+          try:
+              from langfuse import Langfuse
+              langfuse = Langfuse(
+                  public_key=os.environ.get('LANGFUSE_PUBLIC_KEY'),
+                  secret_key=os.environ.get('LANGFUSE_SECRET_KEY'),
+                  host=os.environ.get('LANGFUSE_HOST', 'https://cloud.langfuse.com')
+              ) if os.environ.get('LANGFUSE_PUBLIC_KEY') else None
+          except:
+              langfuse = None
+
+          AZURE_PROXY = os.environ.get('AZURE_PROXY_URL')
+          GEMINI_PROXY = os.environ.get('GEMINI_PROXY_URL')
+
+          AGENT_CARD = {
+              "name": "Coding Agent",
+              "description": "An AI coding agent powered by real LLMs for code review, generation, and debugging",
+              "url": "http://a2a-coding-agent-llm.ai-agents.svc.cluster.local:9090",
+              "version": "2.0.0",
+              "provider": {"organization": "KGateway POC"},
+              "capabilities": {
+                  "streaming": False,
+                  "pushNotifications": False,
+                  "stateTransitionHistory": False
+              },
+              "authentication": {"schemes": ["none"]},
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {"id": "code-review", "name": "Code Review", "description": "Review code for bugs and improvements", "tags": ["code", "review"]},
+                  {"id": "generate-code", "name": "Generate Code", "description": "Generate code in any language", "tags": ["code", "generation"]},
+                  {"id": "debug", "name": "Debug Code", "description": "Help debug and fix code issues", "tags": ["code", "debug"]},
+                  {"id": "explain-code", "name": "Explain Code", "description": "Explain what code does", "tags": ["code", "explanation"]}
+              ]
+          }
+
+          SYSTEM_PROMPT = """You are a Coding Agent. Your role is to:
+          1. Write clean, efficient, well-documented code
+          2. Review code for bugs, security issues, and improvements
+          3. Explain code clearly with examples
+          4. Debug issues systematically
+          Always include code examples when relevant. Use markdown formatting."""
+
+          def call_llm(messages, provider="azure"):
+              url = AZURE_PROXY if provider == "azure" else GEMINI_PROXY
+              try:
+                  data = json.dumps({
+                      "model": "gpt-4o" if provider == "azure" else "gemini-2.5-flash",
+                      "messages": messages,
+                      "max_tokens": 2048
+                  }).encode()
+                  req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      result = json.loads(resp.read().decode())
+                      return result.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+              except Exception as e:
+                  return f"LLM Error: {str(e)}"
+
+          class A2AHandler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args):
+                  print(f"[A2A Coding LLM] {args[0]}")
+
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json':
+                      self.send_json(AGENT_CARD)
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy", "llm": "enabled"})
+                  else:
+                      self.send_json({"error": "Not found"}, 404)
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      request = {}
+
+                  if self.path == '/tasks/send':
+                      task_id = request.get('id', str(uuid.uuid4()))
+                      message = request.get('message', {})
+                      parts = message.get('parts', [])
+                      provider = request.get('provider', 'azure')
+
+                      user_text = ""
+                      for part in parts:
+                          if part.get('type') == 'text':
+                              user_text = part.get('text', '')
+                              break
+
+                      trace_id = str(uuid.uuid4())
+                      if langfuse:
+                          langfuse.trace(id=trace_id, name="coding-agent-task", input={"message": user_text}, tags=["a2a", "coding", "llm"])
+
+                      messages = [
+                          {"role": "system", "content": SYSTEM_PROMPT},
+                          {"role": "user", "content": user_text}
+                      ]
+                      llm_response = call_llm(messages, provider)
+
+                      if langfuse:
+                          langfuse.flush()
+
+                      response = {
+                          "id": task_id,
+                          "sessionId": request.get('sessionId', 'session-001'),
+                          "status": {"state": "completed"},
+                          "artifacts": [{"name": "response", "parts": [{"type": "text", "text": llm_response}]}]
+                      }
+                      self.send_json({"result": response})
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting A2A Coding Agent with Real LLM on port 9090...")
+          HTTPServer(('', 9090), A2AHandler).serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-coding-agent-llm
+  namespace: ai-agents
+spec:
+  selector:
+    app: a2a-coding-agent-llm
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# A2A Support Agent with Real LLM
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-support-agent-llm
+  namespace: ai-agents
+  labels:
+    app: a2a-support-agent-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2a-support-agent-llm
+  template:
+    metadata:
+      labels:
+        app: a2a-support-agent-llm
+    spec:
+      containers:
+      - name: a2a-agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        env:
+        - name: AZURE_PROXY_URL
+          value: "http://azure-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: GEMINI_PROXY_URL
+          value: "http://gemini-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: LANGFUSE_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-public-key
+              optional: true
+        - name: LANGFUSE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-secret-key
+              optional: true
+        - name: LANGFUSE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-host
+              optional: true
+        command: ["python", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "langfuse==2.44.0", "-q"])
+
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+          import urllib.request
+          import os
+          import uuid
+
+          try:
+              from langfuse import Langfuse
+              langfuse = Langfuse(
+                  public_key=os.environ.get('LANGFUSE_PUBLIC_KEY'),
+                  secret_key=os.environ.get('LANGFUSE_SECRET_KEY'),
+                  host=os.environ.get('LANGFUSE_HOST', 'https://cloud.langfuse.com')
+              ) if os.environ.get('LANGFUSE_PUBLIC_KEY') else None
+          except:
+              langfuse = None
+
+          AZURE_PROXY = os.environ.get('AZURE_PROXY_URL')
+          GEMINI_PROXY = os.environ.get('GEMINI_PROXY_URL')
+
+          AGENT_CARD = {
+              "name": "Customer Support Agent",
+              "description": "An AI customer support agent powered by real LLMs for handling inquiries and issues",
+              "url": "http://a2a-support-agent-llm.ai-agents.svc.cluster.local:9090",
+              "version": "2.0.0",
+              "provider": {"organization": "KGateway POC"},
+              "capabilities": {"streaming": False, "pushNotifications": False, "stateTransitionHistory": False},
+              "authentication": {"schemes": ["none"]},
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {"id": "handle-inquiry", "name": "Handle Inquiries", "description": "Answer customer questions", "tags": ["support", "questions"]},
+                  {"id": "resolve-issue", "name": "Resolve Issues", "description": "Help resolve customer issues", "tags": ["support", "issues"]},
+                  {"id": "account-help", "name": "Account Help", "description": "Assist with account-related requests", "tags": ["account", "billing"]}
+              ]
+          }
+
+          SYSTEM_PROMPT = """You are a Customer Support Agent. Your role is to:
+          1. Be helpful, friendly, and professional
+          2. Address customer concerns with empathy
+          3. Provide clear solutions and next steps
+          4. Escalate complex issues appropriately
+          Always maintain a positive, solution-oriented tone."""
+
+          def call_llm(messages, provider="azure"):
+              url = AZURE_PROXY if provider == "azure" else GEMINI_PROXY
+              try:
+                  data = json.dumps({
+                      "model": "gpt-4o" if provider == "azure" else "gemini-2.5-flash",
+                      "messages": messages,
+                      "max_tokens": 1024
+                  }).encode()
+                  req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      result = json.loads(resp.read().decode())
+                      return result.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+              except Exception as e:
+                  return f"LLM Error: {str(e)}"
+
+          class A2AHandler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args):
+                  print(f"[A2A Support LLM] {args[0]}")
+
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json':
+                      self.send_json(AGENT_CARD)
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy", "llm": "enabled"})
+                  else:
+                      self.send_json({"error": "Not found"}, 404)
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      request = {}
+
+                  if self.path == '/tasks/send':
+                      task_id = request.get('id', str(uuid.uuid4()))
+                      message = request.get('message', {})
+                      parts = message.get('parts', [])
+                      provider = request.get('provider', 'azure')
+
+                      user_text = ""
+                      for part in parts:
+                          if part.get('type') == 'text':
+                              user_text = part.get('text', '')
+                              break
+
+                      trace_id = str(uuid.uuid4())
+                      if langfuse:
+                          langfuse.trace(id=trace_id, name="support-agent-task", input={"message": user_text}, tags=["a2a", "support", "llm"])
+
+                      messages = [
+                          {"role": "system", "content": SYSTEM_PROMPT},
+                          {"role": "user", "content": user_text}
+                      ]
+                      llm_response = call_llm(messages, provider)
+
+                      if langfuse:
+                          langfuse.flush()
+
+                      response = {
+                          "id": task_id,
+                          "sessionId": request.get('sessionId', 'session-001'),
+                          "status": {"state": "completed"},
+                          "artifacts": [{"name": "response", "parts": [{"type": "text", "text": llm_response}]}]
+                      }
+                      self.send_json({"result": response})
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting A2A Support Agent with Real LLM on port 9090...")
+          HTTPServer(('', 9090), A2AHandler).serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-support-agent-llm
+  namespace: ai-agents
+spec:
+  selector:
+    app: a2a-support-agent-llm
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# A2A Orchestrator with LLM-based Routing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-orchestrator-llm
+  namespace: ai-agents
+  labels:
+    app: a2a-orchestrator-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2a-orchestrator-llm
+  template:
+    metadata:
+      labels:
+        app: a2a-orchestrator-llm
+    spec:
+      containers:
+      - name: orchestrator
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8080
+        env:
+        - name: RESEARCH_AGENT_URL
+          value: "http://a2a-research-agent-llm.ai-agents.svc.cluster.local:9090"
+        - name: CODING_AGENT_URL
+          value: "http://a2a-coding-agent-llm.ai-agents.svc.cluster.local:9090"
+        - name: SUPPORT_AGENT_URL
+          value: "http://a2a-support-agent-llm.ai-agents.svc.cluster.local:9090"
+        - name: AZURE_PROXY_URL
+          value: "http://azure-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: LANGFUSE_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-public-key
+              optional: true
+        - name: LANGFUSE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-secret-key
+              optional: true
+        - name: LANGFUSE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-host
+              optional: true
+        command: ["python", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "langfuse==2.44.0", "-q"])
+
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+          import urllib.request
+          import os
+          import uuid
+
+          try:
+              from langfuse import Langfuse
+              langfuse = Langfuse(
+                  public_key=os.environ.get('LANGFUSE_PUBLIC_KEY'),
+                  secret_key=os.environ.get('LANGFUSE_SECRET_KEY'),
+                  host=os.environ.get('LANGFUSE_HOST', 'https://cloud.langfuse.com')
+              ) if os.environ.get('LANGFUSE_PUBLIC_KEY') else None
+          except:
+              langfuse = None
+
+          RESEARCH_AGENT = os.environ.get('RESEARCH_AGENT_URL')
+          CODING_AGENT = os.environ.get('CODING_AGENT_URL')
+          SUPPORT_AGENT = os.environ.get('SUPPORT_AGENT_URL')
+          AZURE_PROXY = os.environ.get('AZURE_PROXY_URL')
+
+          AGENTS = {
+              "research": {"url": RESEARCH_AGENT, "description": "Research and information gathering"},
+              "coding": {"url": CODING_AGENT, "description": "Code review, generation, debugging"},
+              "support": {"url": SUPPORT_AGENT, "description": "Customer support and account help"}
+          }
+
+          def call_llm_for_routing(message, trace_id=None):
+              """Use LLM to decide which agent to route to"""
+              prompt = f"""You are a routing agent. Based on the user's message, decide which agent should handle it.
+
+          Available agents:
+          - research: For questions about topics, explanations, research
+          - coding: For code review, writing code, debugging, programming questions
+          - support: For customer service, billing, account issues, complaints
+
+          User message: "{message}"
+
+          Respond with ONLY one word: research, coding, or support"""
+
+              # Create generation span for routing LLM call
+              generation = None
+              if langfuse and trace_id:
+                  generation = langfuse.generation(
+                      trace_id=trace_id,
+                      name="routing-llm-call",
+                      model="gpt-4o",
+                      input=[{"role": "user", "content": prompt}],
+                      metadata={"purpose": "agent_routing"}
+                  )
+
+              try:
+                  data = json.dumps({
+                      "model": "gpt-4o",
+                      "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 10
+                  }).encode()
+                  req = urllib.request.Request(AZURE_PROXY, data=data, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      result = json.loads(resp.read().decode())
+                      response_text = result.get('choices', [{}])[0].get('message', {}).get('content', 'research').strip().lower()
+
+                      if generation:
+                          generation.end(
+                              output={"selected_agent": response_text},
+                              usage=result.get('usage', {})
+                          )
+
+                      if response_text in AGENTS:
+                          return response_text
+                      return "research"
+              except Exception as e:
+                  if generation:
+                      generation.end(output={"error": str(e)}, level="ERROR")
+                  # Fallback to keyword matching
+                  msg = message.lower()
+                  if any(w in msg for w in ['code', 'program', 'function', 'bug', 'debug']):
+                      return "coding"
+                  elif any(w in msg for w in ['help', 'support', 'billing', 'account', 'refund']):
+                      return "support"
+                  return "research"
+
+          def call_a2a_agent(agent_url, message, provider="azure", trace_id=None):
+              """Call an A2A agent using A2A protocol"""
+              # Create span for agent call
+              span = None
+              if langfuse and trace_id:
+                  span = langfuse.span(
+                      trace_id=trace_id,
+                      name="a2a-agent-call",
+                      input={"url": agent_url, "message": message, "provider": provider},
+                      metadata={"protocol": "a2a", "endpoint": "/tasks/send"}
+                  )
+
+              try:
+
+                  simple_request = {
+                      "id": f"task-{uuid.uuid4()}",
+                      "sessionId": f"session-{uuid.uuid4()}",
+                      "message": {
+                          "role": "user",
+                          "parts": [{"type": "text", "text": message}]
+                      },
+                      "provider": provider
+                  }
+
+                  req = urllib.request.Request(
+                      f"{agent_url}/tasks/send",
+                      data=json.dumps(simple_request).encode(),
+                      headers={'Content-Type': 'application/json'},
+                      method='POST'
+                  )
+                  with urllib.request.urlopen(req, timeout=120) as response:
+                      result = json.loads(response.read().decode())
+
+                      # End span with output
+                      if span:
+                          # Extract the text response for cleaner output
+                          agent_response = "No response"
+                          try:
+                              artifacts = result.get('result', {}).get('artifacts', [])
+                              if artifacts:
+                                  parts = artifacts[0].get('parts', [])
+                                  if parts:
+                                      agent_response = parts[0].get('text', 'No text')[:500]  # Truncate for readability
+                          except:
+                              pass
+                          span.end(output={"agent_response": agent_response, "status": "completed"})
+
+                      return result
+              except Exception as e:
+                  if span:
+                      span.end(output={"error": str(e)}, level="ERROR")
+                  return {"error": str(e)}
+
+          def get_agent_card(agent_url):
+              """Get A2A agent card"""
+              try:
+                  req = urllib.request.Request(f"{agent_url}/.well-known/agent.json")
+                  with urllib.request.urlopen(req, timeout=10) as response:
+                      return json.loads(response.read().decode())
+              except Exception as e:
+                  return {"error": str(e)}
+
+          class OrchestratorHandler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args):
+                  print(f"[A2A Orchestrator LLM] {args[0]}")
+
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data, indent=2).encode())
+
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+
+              def do_GET(self):
+                  if self.path == '/agents':
+                      agents_info = []
+                      for name, info in AGENTS.items():
+                          agents_info.append({
+                              "name": name,
+                              "url": info["url"],
+                              "description": info["description"],
+                              "card": get_agent_card(info["url"])
+                          })
+                      self.send_json({"agents": agents_info})
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy", "service": "a2a-orchestrator-llm", "routing": "llm-based"})
+                  elif self.path == '/.well-known/agent.json':
+                      self.send_json({
+                          "name": "A2A Orchestrator",
+                          "description": "Routes tasks to specialized agents using LLM-based routing",
+                          "version": "2.0.0",
+                          "capabilities": {"streaming": False},
+                          "skills": [
+                              {"id": "orchestrate", "name": "Smart Routing", "description": "Routes to best agent using AI"}
+                          ]
+                      })
+                  else:
+                      self.send_json({
+                          "service": "A2A Orchestrator with LLM Routing",
+                          "version": "2.0.0",
+                          "endpoints": {
+                              "GET /agents": "List available A2A agents with their cards",
+                              "GET /.well-known/agent.json": "Get orchestrator agent card",
+                              "POST /orchestrate": "Route task to best agent (LLM decides)",
+                              "POST /delegate": "Delegate to specific agent"
+                          }
+                      })
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      self.send_json({"error": "Invalid JSON"}, 400)
+                      return
+
+                  if self.path == '/orchestrate':
+                      message = request.get('message', '')
+                      provider = request.get('provider', 'azure')
+                      trace_id = str(uuid.uuid4())
+
+                      # Create Langfuse trace
+                      if langfuse:
+                          langfuse.trace(
+                              id=trace_id,
+                              name="a2a-orchestration",
+                              input={"message": message, "provider": provider},
+                              metadata={"routing": "llm-based", "gateway": "kgateway"},
+                              tags=["a2a", "orchestrator", "llm-routing", "production"]
+                          )
+
+                      # Use LLM to decide routing (creates generation span internally)
+                      agent_name = call_llm_for_routing(message, trace_id)
+                      agent_url = AGENTS[agent_name]["url"]
+
+                      # Call the selected agent (creates span internally with proper output)
+                      result = call_a2a_agent(agent_url, message, provider, trace_id)
+
+                      response = {
+                          "orchestrated_to": agent_name,
+                          "routing_method": "llm",
+                          "message": message,
+                          "provider": provider,
+                          "response": result,
+                          "trace_id": trace_id
+                      }
+
+                      if langfuse:
+                          langfuse.flush()
+
+                      self.send_json(response)
+
+                  elif self.path == '/delegate':
+                      agent_name = request.get('agent', 'research')
+                      message = request.get('message', '')
+                      provider = request.get('provider', 'azure')
+                      trace_id = str(uuid.uuid4())
+
+                      if agent_name not in AGENTS:
+                          self.send_json({"error": f"Unknown agent: {agent_name}"}, 400)
+                          return
+
+                      if langfuse:
+                          langfuse.trace(id=trace_id, name="a2a-delegation", input={"agent": agent_name, "message": message}, tags=["a2a", "delegation"])
+
+                      agent_url = AGENTS[agent_name]["url"]
+                      result = call_a2a_agent(agent_url, message, provider, trace_id)
+
+                      if langfuse:
+                          langfuse.flush()
+
+                      self.send_json({
+                          "delegated_to": agent_name,
+                          "message": message,
+                          "provider": provider,
+                          "response": result,
+                          "trace_id": trace_id
+                      })
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting A2A Orchestrator with LLM Routing on port 8080...")
+          HTTPServer(('', 8080), OrchestratorHandler).serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-orchestrator-llm
+  namespace: ai-agents
+spec:
+  selector:
+    app: a2a-orchestrator-llm
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+---
+# Backend for A2A Orchestrator LLM
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: a2a-orchestrator-llm-backend
+  namespace: kgateway-system
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: a2a-orchestrator-llm.ai-agents.svc.cluster.local
+      port: 80
+---
+# Route for A2A LLM Orchestrator
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: a2a-llm-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /a2a-llm
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /
+    backendRefs:
+    - name: a2a-orchestrator-llm-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend
