@@ -58,20 +58,20 @@ spec:
                 name: agentgateway
                 port:
                   number: 8080
-    # Also allow access via IP directly
+    # Allow access via IP directly - routes to demo orchestrator
     - http:
         paths:
-          - path: /ui
+          - path: /demo
             pathType: Prefix
             backend:
               service:
                 name: agentgateway
                 port:
-                  number: 15000
+                  number: 8080
           - path: /
             pathType: Prefix
             backend:
               service:
                 name: agentgateway
                 port:
-                  number: 15000
+                  number: 8080
