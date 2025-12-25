@@ -40,7 +40,7 @@ metadata:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
     # IP Whitelist
-    nginx.ingress.kubernetes.io/whitelist-source-range: "212.179.5.11/32,212.179.5.3/32"
+    nginx.ingress.kubernetes.io/whitelist-source-range: "2.54.189.208/32,212.179.5.3/32,212.179.5.11/32"
 spec:
   ingressClassName: nginx
   tls:
