@@ -1,0 +1,26 @@
+---
+# AgentGateway UI Service - IP Restricted
+# Exposes the AgentGateway dashboard UI on a public IP
+# Restricted to specific IP addresses only
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentgateway-ui
+  namespace: kgateway-system
+  labels:
+    app: agentgateway-ui
+spec:
+  type: LoadBalancer
+  # IP Whitelist - only these IPs can access the UI
+  loadBalancerSourceRanges:
+    - 212.179.5.11/32   # Your current IP
+    - 212.179.5.3/32    # Additional allowed IP
+  selector:
+    app.kubernetes.io/name: agentgateway
+    app.kubernetes.io/instance: agentgateway
+  ports:
+    - name: ui
+      port: 15000
+      targetPort: 15000
+      protocol: TCP
