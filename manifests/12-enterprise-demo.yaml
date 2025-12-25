@@ -1,0 +1,983 @@
+---
+# Enterprise AI Assistant Demo
+# Use Case: Corporate Help Desk with intelligent routing
+# Demonstrates: A2A Protocol, LLM Routing, MCP Integration, Langfuse Observability
+---
+# Technical Support Agent - Handles IT issues, software, hardware problems
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-tech-support
+  namespace: ai-agents
+  labels:
+    app: demo-tech-support
+    demo: enterprise-assistant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-tech-support
+  template:
+    metadata:
+      labels:
+        app: demo-tech-support
+        demo: enterprise-assistant
+    spec:
+      containers:
+      - name: agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        env:
+        - name: AZURE_PROXY_URL
+          value: "http://azure-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: LANGFUSE_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-public-key
+        - name: LANGFUSE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-secret-key
+        - name: LANGFUSE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-host
+        command: ["python", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "langfuse==2.44.0", "-q"])
+
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json, urllib.request, os, uuid
+
+          try:
+              from langfuse import Langfuse
+              langfuse = Langfuse(
+                  public_key=os.environ.get('LANGFUSE_PUBLIC_KEY'),
+                  secret_key=os.environ.get('LANGFUSE_SECRET_KEY'),
+                  host=os.environ.get('LANGFUSE_HOST')
+              )
+          except:
+              langfuse = None
+
+          AZURE_PROXY = os.environ.get('AZURE_PROXY_URL')
+
+          AGENT_CARD = {
+              "name": "Technical Support Agent",
+              "description": "Enterprise IT support specialist for software, hardware, and network issues",
+              "url": "http://demo-tech-support.ai-agents.svc.cluster.local:9090",
+              "version": "1.0.0",
+              "provider": {"organization": "Acme Corp IT"},
+              "capabilities": {"streaming": False, "pushNotifications": False},
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {"id": "troubleshoot", "name": "Troubleshooting", "description": "Diagnose and resolve technical issues", "tags": ["it", "support", "troubleshoot"]},
+                  {"id": "software-help", "name": "Software Support", "description": "Help with software installation and configuration", "tags": ["software", "install", "config"]},
+                  {"id": "network-help", "name": "Network Support", "description": "Resolve connectivity and network issues", "tags": ["network", "vpn", "wifi"]},
+                  {"id": "security", "name": "Security Support", "description": "Handle security concerns and access issues", "tags": ["security", "password", "access"]}
+              ]
+          }
+
+          SYSTEM_PROMPT = """You are a Technical Support Agent for Acme Corporation's IT Help Desk.
+
+          Your expertise includes:
+          - Software troubleshooting (Microsoft Office, Slack, Zoom, Jira, etc.)
+          - Hardware issues (laptops, monitors, peripherals)
+          - Network connectivity (VPN, WiFi, email)
+          - Account access and password resets
+          - Security concerns
+
+          Guidelines:
+          1. Be professional and patient
+          2. Ask clarifying questions when needed
+          3. Provide step-by-step solutions
+          4. Escalate complex issues to Level 2 support when necessary
+          5. Always verify the issue is resolved before closing
+
+          Common solutions to reference:
+          - VPN issues: Check internet connection, restart VPN client, verify credentials
+          - Slow computer: Check disk space, restart, check for updates
+          - Email issues: Verify Outlook is connected, check server status
+          - Password reset: Direct to SSO portal or create ticket
+
+          End each response with a follow-up question or confirmation."""
+
+          def call_llm(messages, trace_id=None):
+              generation = None
+              if langfuse and trace_id:
+                  generation = langfuse.generation(
+                      trace_id=trace_id, name="tech-support-llm",
+                      model="gpt-4o", input=messages,
+                      metadata={"agent": "tech-support"}
+                  )
+              try:
+                  data = json.dumps({"model": "gpt-4o", "messages": messages, "max_tokens": 1024}).encode()
+                  req = urllib.request.Request(AZURE_PROXY, data=data, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      result = json.loads(resp.read().decode())
+                      response = result.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+                      if generation:
+                          generation.end(output=response, usage=result.get('usage', {}))
+                      return response
+              except Exception as e:
+                  if generation:
+                      generation.end(output={"error": str(e)}, level="ERROR")
+                  return f"Error: {str(e)}"
+
+          class Handler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args): print(f"[TechSupport] {args[0]}")
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json': self.send_json(AGENT_CARD)
+                  elif self.path == '/health': self.send_json({"status": "healthy", "agent": "tech-support"})
+                  else: self.send_json({"error": "Not found"}, 404)
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+                  try: request = json.loads(body) if body else {}
+                  except: request = {}
+                  if self.path == '/tasks/send':
+                      task_id = request.get('id', str(uuid.uuid4()))
+                      parts = request.get('message', {}).get('parts', [])
+                      user_text = next((p.get('text', '') for p in parts if p.get('type') == 'text'), '')
+                      trace_id = request.get('trace_id', str(uuid.uuid4()))
+
+                      if langfuse:
+                          langfuse.trace(id=trace_id, name="tech-support-task", input={"message": user_text}, tags=["demo", "tech-support"])
+
+                      messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_text}]
+                      response_text = call_llm(messages, trace_id)
+
+                      if langfuse: langfuse.flush()
+
+                      self.send_json({"result": {
+                          "id": task_id, "sessionId": request.get('sessionId', 'session'),
+                          "status": {"state": "completed"},
+                          "artifacts": [{"name": "response", "parts": [{"type": "text", "text": response_text}]}]
+                      }})
+                  else: self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting Technical Support Agent on port 9090...")
+          HTTPServer(('', 9090), Handler).serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-tech-support
+  namespace: ai-agents
+spec:
+  selector:
+    app: demo-tech-support
+  ports:
+  - port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# HR Assistant Agent - Handles HR policies, benefits, leave requests
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-hr-assistant
+  namespace: ai-agents
+  labels:
+    app: demo-hr-assistant
+    demo: enterprise-assistant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-hr-assistant
+  template:
+    metadata:
+      labels:
+        app: demo-hr-assistant
+        demo: enterprise-assistant
+    spec:
+      containers:
+      - name: agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        env:
+        - name: AZURE_PROXY_URL
+          value: "http://azure-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: LANGFUSE_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-public-key
+        - name: LANGFUSE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-secret-key
+        - name: LANGFUSE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-host
+        command: ["python", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "langfuse==2.44.0", "-q"])
+
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json, urllib.request, os, uuid
+
+          try:
+              from langfuse import Langfuse
+              langfuse = Langfuse(
+                  public_key=os.environ.get('LANGFUSE_PUBLIC_KEY'),
+                  secret_key=os.environ.get('LANGFUSE_SECRET_KEY'),
+                  host=os.environ.get('LANGFUSE_HOST')
+              )
+          except:
+              langfuse = None
+
+          AZURE_PROXY = os.environ.get('AZURE_PROXY_URL')
+
+          AGENT_CARD = {
+              "name": "HR Assistant",
+              "description": "Human Resources assistant for policies, benefits, and employee services",
+              "url": "http://demo-hr-assistant.ai-agents.svc.cluster.local:9090",
+              "version": "1.0.0",
+              "provider": {"organization": "Acme Corp HR"},
+              "capabilities": {"streaming": False},
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {"id": "policies", "name": "HR Policies", "description": "Information about company policies", "tags": ["hr", "policy", "rules"]},
+                  {"id": "benefits", "name": "Benefits", "description": "Health insurance, 401k, perks", "tags": ["benefits", "insurance", "401k"]},
+                  {"id": "leave", "name": "Leave Management", "description": "PTO, sick leave, holidays", "tags": ["pto", "vacation", "leave"]},
+                  {"id": "onboarding", "name": "Onboarding", "description": "New employee information", "tags": ["onboarding", "new-hire"]}
+              ]
+          }
+
+          SYSTEM_PROMPT = """You are an HR Assistant for Acme Corporation.
+
+          You have knowledge of:
+          - Company policies and employee handbook
+          - Benefits (health, dental, vision, 401k with 4% match)
+          - PTO policy (15 days for 0-2 years, 20 days for 3-5 years, 25 days for 5+ years)
+          - Sick leave (10 days per year)
+          - Remote work policy (hybrid - 3 days in office, 2 days remote)
+          - Performance review process (quarterly check-ins, annual reviews)
+          - Employee referral program ($2,000 bonus for successful hires)
+
+          Guidelines:
+          1. Be warm, approachable, and confidential
+          2. Provide accurate policy information
+          3. Direct employees to appropriate forms or portals when needed
+          4. For sensitive matters, suggest scheduling time with HR representative
+          5. Never make promises about specific outcomes
+
+          Key contacts:
+          - Benefits questions: benefits@acmecorp.com
+          - Leave requests: Submit via Workday
+          - Policy concerns: hr@acmecorp.com
+
+          Always provide helpful next steps."""
+
+          def call_llm(messages, trace_id=None):
+              generation = None
+              if langfuse and trace_id:
+                  generation = langfuse.generation(
+                      trace_id=trace_id, name="hr-assistant-llm",
+                      model="gpt-4o", input=messages,
+                      metadata={"agent": "hr-assistant"}
+                  )
+              try:
+                  data = json.dumps({"model": "gpt-4o", "messages": messages, "max_tokens": 1024}).encode()
+                  req = urllib.request.Request(AZURE_PROXY, data=data, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      result = json.loads(resp.read().decode())
+                      response = result.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+                      if generation:
+                          generation.end(output=response, usage=result.get('usage', {}))
+                      return response
+              except Exception as e:
+                  if generation:
+                      generation.end(output={"error": str(e)}, level="ERROR")
+                  return f"Error: {str(e)}"
+
+          class Handler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args): print(f"[HR Assistant] {args[0]}")
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json': self.send_json(AGENT_CARD)
+                  elif self.path == '/health': self.send_json({"status": "healthy", "agent": "hr-assistant"})
+                  else: self.send_json({"error": "Not found"}, 404)
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+                  try: request = json.loads(body) if body else {}
+                  except: request = {}
+                  if self.path == '/tasks/send':
+                      task_id = request.get('id', str(uuid.uuid4()))
+                      parts = request.get('message', {}).get('parts', [])
+                      user_text = next((p.get('text', '') for p in parts if p.get('type') == 'text'), '')
+                      trace_id = request.get('trace_id', str(uuid.uuid4()))
+
+                      if langfuse:
+                          langfuse.trace(id=trace_id, name="hr-assistant-task", input={"message": user_text}, tags=["demo", "hr"])
+
+                      messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_text}]
+                      response_text = call_llm(messages, trace_id)
+
+                      if langfuse: langfuse.flush()
+
+                      self.send_json({"result": {
+                          "id": task_id, "sessionId": request.get('sessionId', 'session'),
+                          "status": {"state": "completed"},
+                          "artifacts": [{"name": "response", "parts": [{"type": "text", "text": response_text}]}]
+                      }})
+                  else: self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting HR Assistant on port 9090...")
+          HTTPServer(('', 9090), Handler).serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-hr-assistant
+  namespace: ai-agents
+spec:
+  selector:
+    app: demo-hr-assistant
+  ports:
+  - port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# Knowledge Base Agent - Company documentation, procedures, FAQs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-knowledge-base
+  namespace: ai-agents
+  labels:
+    app: demo-knowledge-base
+    demo: enterprise-assistant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-knowledge-base
+  template:
+    metadata:
+      labels:
+        app: demo-knowledge-base
+        demo: enterprise-assistant
+    spec:
+      containers:
+      - name: agent
+        image: python:3.11-slim
+        ports:
+        - containerPort: 9090
+        env:
+        - name: AZURE_PROXY_URL
+          value: "http://azure-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: LANGFUSE_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-public-key
+        - name: LANGFUSE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-secret-key
+        - name: LANGFUSE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-host
+        command: ["python", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "langfuse==2.44.0", "-q"])
+
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json, urllib.request, os, uuid
+
+          try:
+              from langfuse import Langfuse
+              langfuse = Langfuse(
+                  public_key=os.environ.get('LANGFUSE_PUBLIC_KEY'),
+                  secret_key=os.environ.get('LANGFUSE_SECRET_KEY'),
+                  host=os.environ.get('LANGFUSE_HOST')
+              )
+          except:
+              langfuse = None
+
+          AZURE_PROXY = os.environ.get('AZURE_PROXY_URL')
+
+          AGENT_CARD = {
+              "name": "Knowledge Base Agent",
+              "description": "Company knowledge base for procedures, documentation, and FAQs",
+              "url": "http://demo-knowledge-base.ai-agents.svc.cluster.local:9090",
+              "version": "1.0.0",
+              "provider": {"organization": "Acme Corp"},
+              "capabilities": {"streaming": False},
+              "defaultInputModes": ["text"],
+              "defaultOutputModes": ["text"],
+              "skills": [
+                  {"id": "procedures", "name": "Procedures", "description": "Standard operating procedures", "tags": ["sop", "procedures", "how-to"]},
+                  {"id": "company-info", "name": "Company Info", "description": "Company information and structure", "tags": ["company", "org", "structure"]},
+                  {"id": "faq", "name": "FAQs", "description": "Frequently asked questions", "tags": ["faq", "common", "questions"]}
+              ]
+          }
+
+          SYSTEM_PROMPT = """You are a Knowledge Base Assistant for Acme Corporation.
+
+          You have access to company documentation including:
+
+          COMPANY OVERVIEW:
+          - Founded: 2010
+          - Headquarters: San Francisco, CA
+          - Employees: 5,000+
+          - Industry: Enterprise Software
+          - CEO: Jane Smith
+          - Mission: "Empowering businesses through innovative technology"
+
+          OFFICE LOCATIONS:
+          - San Francisco (HQ): 100 Market Street
+          - New York: 200 Park Avenue
+          - London: 50 Oxford Street
+          - Singapore: 10 Marina Boulevard
+
+          STANDARD PROCEDURES:
+          - Expense Reports: Submit within 30 days via Concur
+          - Travel Booking: Use Corporate Travel portal, approval needed for flights over $500
+          - Meeting Room Booking: Via Outlook or Robin app
+          - Visitor Access: Register guests 24 hours in advance via reception portal
+          - Equipment Requests: Submit ticket to IT, approval within 48 hours
+
+          KEY SYSTEMS:
+          - Email: Microsoft Outlook
+          - Chat: Slack
+          - HR System: Workday
+          - Project Management: Jira
+          - Document Storage: SharePoint and Google Drive
+          - Time Tracking: Harvest
+
+          EMERGENCY CONTACTS:
+          - Security: ext. 5555
+          - Facilities: ext. 5556
+          - IT Emergency: ext. 5557
+
+          Provide accurate, helpful information and direct users to appropriate resources."""
+
+          def call_llm(messages, trace_id=None):
+              generation = None
+              if langfuse and trace_id:
+                  generation = langfuse.generation(
+                      trace_id=trace_id, name="knowledge-base-llm",
+                      model="gpt-4o", input=messages,
+                      metadata={"agent": "knowledge-base"}
+                  )
+              try:
+                  data = json.dumps({"model": "gpt-4o", "messages": messages, "max_tokens": 1024}).encode()
+                  req = urllib.request.Request(AZURE_PROXY, data=data, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      result = json.loads(resp.read().decode())
+                      response = result.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+                      if generation:
+                          generation.end(output=response, usage=result.get('usage', {}))
+                      return response
+              except Exception as e:
+                  if generation:
+                      generation.end(output={"error": str(e)}, level="ERROR")
+                  return f"Error: {str(e)}"
+
+          class Handler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args): print(f"[KnowledgeBase] {args[0]}")
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data).encode())
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+              def do_GET(self):
+                  if self.path == '/.well-known/agent.json': self.send_json(AGENT_CARD)
+                  elif self.path == '/health': self.send_json({"status": "healthy", "agent": "knowledge-base"})
+                  else: self.send_json({"error": "Not found"}, 404)
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+                  try: request = json.loads(body) if body else {}
+                  except: request = {}
+                  if self.path == '/tasks/send':
+                      task_id = request.get('id', str(uuid.uuid4()))
+                      parts = request.get('message', {}).get('parts', [])
+                      user_text = next((p.get('text', '') for p in parts if p.get('type') == 'text'), '')
+                      trace_id = request.get('trace_id', str(uuid.uuid4()))
+
+                      if langfuse:
+                          langfuse.trace(id=trace_id, name="knowledge-base-task", input={"message": user_text}, tags=["demo", "knowledge-base"])
+
+                      messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_text}]
+                      response_text = call_llm(messages, trace_id)
+
+                      if langfuse: langfuse.flush()
+
+                      self.send_json({"result": {
+                          "id": task_id, "sessionId": request.get('sessionId', 'session'),
+                          "status": {"state": "completed"},
+                          "artifacts": [{"name": "response", "parts": [{"type": "text", "text": response_text}]}]
+                      }})
+                  else: self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting Knowledge Base Agent on port 9090...")
+          HTTPServer(('', 9090), Handler).serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-knowledge-base
+  namespace: ai-agents
+spec:
+  selector:
+    app: demo-knowledge-base
+  ports:
+  - port: 9090
+    targetPort: 9090
+    appProtocol: kgateway.dev/a2a
+---
+# Enterprise Assistant Orchestrator - Routes to appropriate agent
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-orchestrator
+  namespace: ai-agents
+  labels:
+    app: demo-orchestrator
+    demo: enterprise-assistant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-orchestrator
+  template:
+    metadata:
+      labels:
+        app: demo-orchestrator
+        demo: enterprise-assistant
+    spec:
+      containers:
+      - name: orchestrator
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8080
+        env:
+        - name: TECH_SUPPORT_URL
+          value: "http://demo-tech-support.ai-agents.svc.cluster.local:9090"
+        - name: HR_ASSISTANT_URL
+          value: "http://demo-hr-assistant.ai-agents.svc.cluster.local:9090"
+        - name: KNOWLEDGE_BASE_URL
+          value: "http://demo-knowledge-base.ai-agents.svc.cluster.local:9090"
+        - name: AZURE_PROXY_URL
+          value: "http://azure-proxy.ai-agents.svc.cluster.local/v1/chat/completions"
+        - name: LANGFUSE_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-public-key
+        - name: LANGFUSE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-secret-key
+        - name: LANGFUSE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-secrets
+              key: langfuse-host
+        command: ["python", "-c"]
+        args:
+        - |
+          import subprocess
+          subprocess.run(["pip", "install", "langfuse==2.44.0", "-q"])
+
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json, urllib.request, os, uuid
+
+          try:
+              from langfuse import Langfuse
+              langfuse = Langfuse(
+                  public_key=os.environ.get('LANGFUSE_PUBLIC_KEY'),
+                  secret_key=os.environ.get('LANGFUSE_SECRET_KEY'),
+                  host=os.environ.get('LANGFUSE_HOST')
+              )
+          except:
+              langfuse = None
+
+          TECH_SUPPORT = os.environ.get('TECH_SUPPORT_URL')
+          HR_ASSISTANT = os.environ.get('HR_ASSISTANT_URL')
+          KNOWLEDGE_BASE = os.environ.get('KNOWLEDGE_BASE_URL')
+          AZURE_PROXY = os.environ.get('AZURE_PROXY_URL')
+
+          AGENTS = {
+              "tech-support": {
+                  "url": TECH_SUPPORT,
+                  "name": "Technical Support",
+                  "description": "IT issues, software, hardware, network, passwords"
+              },
+              "hr": {
+                  "url": HR_ASSISTANT,
+                  "name": "HR Assistant",
+                  "description": "Benefits, PTO, policies, leave, onboarding"
+              },
+              "knowledge-base": {
+                  "url": KNOWLEDGE_BASE,
+                  "name": "Knowledge Base",
+                  "description": "Company info, procedures, office locations, systems"
+              }
+          }
+
+          def route_with_llm(message, trace_id):
+              """Use LLM to intelligently route to the right agent"""
+              routing_prompt = f"""You are a routing assistant for an enterprise help desk.
+
+          Based on the user's message, determine which specialist should handle it:
+
+          Available specialists:
+          1. tech-support: IT issues, computer problems, software help, VPN, email issues, password resets, hardware
+          2. hr: Human resources, benefits, PTO/vacation, sick leave, policies, onboarding, performance reviews
+          3. knowledge-base: Company information, office locations, procedures, how-to guides, org structure
+
+          User message: "{message}"
+
+          Respond with ONLY one word: tech-support, hr, or knowledge-base"""
+
+              generation = None
+              if langfuse:
+                  generation = langfuse.generation(
+                      trace_id=trace_id,
+                      name="routing-decision",
+                      model="gpt-4o",
+                      input=[{"role": "user", "content": routing_prompt}],
+                      metadata={"purpose": "agent_routing"}
+                  )
+
+              try:
+                  data = json.dumps({
+                      "model": "gpt-4o",
+                      "messages": [{"role": "user", "content": routing_prompt}],
+                      "max_tokens": 20,
+                      "temperature": 0
+                  }).encode()
+                  req = urllib.request.Request(AZURE_PROXY, data=data, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      result = json.loads(resp.read().decode())
+                      agent = result.get('choices', [{}])[0].get('message', {}).get('content', '').strip().lower()
+
+                      if generation:
+                          generation.end(
+                              output={"selected_agent": agent},
+                              usage=result.get('usage', {})
+                          )
+
+                      if agent in AGENTS:
+                          return agent
+                      return "knowledge-base"
+              except Exception as e:
+                  if generation:
+                      generation.end(output={"error": str(e)}, level="ERROR")
+                  # Fallback routing
+                  msg = message.lower()
+                  if any(w in msg for w in ['computer', 'laptop', 'vpn', 'password', 'software', 'wifi', 'email', 'outlook', 'slow', 'crash']):
+                      return "tech-support"
+                  elif any(w in msg for w in ['pto', 'vacation', 'benefits', 'insurance', '401k', 'leave', 'sick', 'hr', 'policy']):
+                      return "hr"
+                  return "knowledge-base"
+
+          def call_agent(agent_url, message, trace_id):
+              """Call an A2A agent"""
+              span = None
+              if langfuse:
+                  span = langfuse.span(
+                      trace_id=trace_id,
+                      name="agent-call",
+                      input={"url": agent_url, "message": message},
+                      metadata={"protocol": "a2a"}
+                  )
+
+              try:
+                  request_data = {
+                      "id": str(uuid.uuid4()),
+                      "sessionId": str(uuid.uuid4()),
+                      "message": {"role": "user", "parts": [{"type": "text", "text": message}]},
+                      "trace_id": trace_id
+                  }
+                  req = urllib.request.Request(
+                      f"{agent_url}/tasks/send",
+                      data=json.dumps(request_data).encode(),
+                      headers={'Content-Type': 'application/json'}
+                  )
+                  with urllib.request.urlopen(req, timeout=120) as resp:
+                      result = json.loads(resp.read().decode())
+
+                      # Extract response text
+                      response_text = "No response"
+                      try:
+                          artifacts = result.get('result', {}).get('artifacts', [])
+                          if artifacts:
+                              parts = artifacts[0].get('parts', [])
+                              if parts:
+                                  response_text = parts[0].get('text', 'No text')
+                      except:
+                          pass
+
+                      if span:
+                          span.end(output={"response": response_text[:500]})
+
+                      return result
+              except Exception as e:
+                  if span:
+                      span.end(output={"error": str(e)}, level="ERROR")
+                  return {"error": str(e)}
+
+          def get_agent_card(url):
+              try:
+                  req = urllib.request.Request(f"{url}/.well-known/agent.json")
+                  with urllib.request.urlopen(req, timeout=10) as resp:
+                      return json.loads(resp.read().decode())
+              except:
+                  return {}
+
+          class Handler(BaseHTTPRequestHandler):
+              def log_message(self, format, *args): print(f"[Orchestrator] {args[0]}")
+              def send_json(self, data, status=200):
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(data, indent=2).encode())
+              def do_OPTIONS(self):
+                  self.send_response(200)
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                  self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                  self.end_headers()
+
+              def do_GET(self):
+                  if self.path == '/agents':
+                      agents_list = []
+                      for name, info in AGENTS.items():
+                          agents_list.append({
+                              "id": name,
+                              "name": info["name"],
+                              "description": info["description"],
+                              "url": info["url"],
+                              "card": get_agent_card(info["url"])
+                          })
+                      self.send_json({"agents": agents_list, "total": len(agents_list)})
+                  elif self.path == '/health':
+                      self.send_json({"status": "healthy", "service": "enterprise-orchestrator"})
+                  elif self.path == '/.well-known/agent.json':
+                      self.send_json({
+                          "name": "Enterprise Assistant",
+                          "description": "Intelligent routing to specialized enterprise agents",
+                          "version": "1.0.0",
+                          "skills": [
+                              {"id": "route", "name": "Smart Routing", "description": "Routes to the right specialist"}
+                          ]
+                      })
+                  else:
+                      self.send_json({
+                          "service": "Enterprise AI Assistant",
+                          "description": "Acme Corporation Help Desk",
+                          "endpoints": {
+                              "GET /agents": "List available specialist agents",
+                              "POST /ask": "Ask a question (auto-routes to right specialist)",
+                              "POST /ask/{agent}": "Ask specific agent directly"
+                          }
+                      })
+
+              def do_POST(self):
+                  content_length = int(self.headers.get('Content-Length', 0))
+                  body = self.rfile.read(content_length).decode()
+                  try:
+                      request = json.loads(body) if body else {}
+                  except:
+                      self.send_json({"error": "Invalid JSON"}, 400)
+                      return
+
+                  if self.path == '/ask':
+                      message = request.get('message', '')
+                      trace_id = str(uuid.uuid4())
+
+                      # Create main trace
+                      if langfuse:
+                          langfuse.trace(
+                              id=trace_id,
+                              name="enterprise-assistant",
+                              input={"message": message},
+                              metadata={"service": "enterprise-help-desk"},
+                              tags=["demo", "enterprise", "a2a"]
+                          )
+
+                      # Route to appropriate agent
+                      selected_agent = route_with_llm(message, trace_id)
+                      agent_info = AGENTS[selected_agent]
+
+                      # Call the agent
+                      result = call_agent(agent_info["url"], message, trace_id)
+
+                      # Extract response
+                      response_text = "Sorry, I couldn't process your request."
+                      try:
+                          artifacts = result.get('result', {}).get('artifacts', [])
+                          if artifacts:
+                              parts = artifacts[0].get('parts', [])
+                              if parts:
+                                  response_text = parts[0].get('text', response_text)
+                      except:
+                          pass
+
+                      if langfuse:
+                          langfuse.flush()
+
+                      self.send_json({
+                          "routed_to": {
+                              "agent": selected_agent,
+                              "name": agent_info["name"]
+                          },
+                          "message": message,
+                          "response": response_text,
+                          "trace_id": trace_id,
+                          "trace_url": f"https://cloud.langfuse.com/project/*/traces/{trace_id}"
+                      })
+
+                  elif self.path.startswith('/ask/'):
+                      agent_name = self.path.split('/ask/')[-1]
+                      if agent_name not in AGENTS:
+                          self.send_json({"error": f"Unknown agent: {agent_name}"}, 404)
+                          return
+
+                      message = request.get('message', '')
+                      trace_id = str(uuid.uuid4())
+
+                      if langfuse:
+                          langfuse.trace(
+                              id=trace_id,
+                              name=f"direct-{agent_name}",
+                              input={"message": message, "agent": agent_name},
+                              tags=["demo", "direct-call"]
+                          )
+
+                      result = call_agent(AGENTS[agent_name]["url"], message, trace_id)
+
+                      response_text = "Sorry, I couldn't process your request."
+                      try:
+                          artifacts = result.get('result', {}).get('artifacts', [])
+                          if artifacts:
+                              parts = artifacts[0].get('parts', [])
+                              if parts:
+                                  response_text = parts[0].get('text', response_text)
+                      except:
+                          pass
+
+                      if langfuse:
+                          langfuse.flush()
+
+                      self.send_json({
+                          "agent": agent_name,
+                          "message": message,
+                          "response": response_text,
+                          "trace_id": trace_id
+                      })
+                  else:
+                      self.send_json({"error": "Unknown endpoint"}, 404)
+
+          print("Starting Enterprise Assistant Orchestrator on port 8080...")
+          HTTPServer(('', 8080), Handler).serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-orchestrator
+  namespace: ai-agents
+spec:
+  selector:
+    app: demo-orchestrator
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+# Backend for Demo Orchestrator
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: demo-orchestrator-backend
+  namespace: kgateway-system
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: demo-orchestrator.ai-agents.svc.cluster.local
+      port: 80
+---
+# Route for Enterprise Demo
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: demo-enterprise-route
+  namespace: kgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway
+    namespace: kgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /demo
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /
+    backendRefs:
+    - name: demo-orchestrator-backend
+      namespace: kgateway-system
+      group: gateway.kgateway.dev
+      kind: Backend
