@@ -39,8 +39,6 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
-    # IP Whitelist
-    nginx.ingress.kubernetes.io/whitelist-source-range: "2.54.189.208/32,212.179.5.3/32,212.179.5.11/32"
 spec:
   ingressClassName: nginx
   tls:
@@ -75,10 +73,17 @@ spec:
                 name: agentgateway
                 port:
                   number: 8080
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: chat-ui-ext
+                port:
+                  number: 80
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: agentgateway
+                name: chat-ui-ext
                 port:
-                  number: 15080
+                  number: 80
