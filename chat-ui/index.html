@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise AI Assistant</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-input: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border: #475569;
+            --success: #22c55e;
+            --tech-support: #3b82f6;
+            --hr: #a855f7;
+            --knowledge: #14b8a6;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .logo-text {
+            font-weight: 700;
+            font-size: 18px;
+        }
+
+        .logo-subtitle {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+
+        .agents-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 24px;
+        }
+
+        .agent-card {
+            background: var(--bg-dark);
+            border-radius: 8px;
+            padding: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .agent-card:hover {
+            border-color: var(--border);
+        }
+
+        .agent-card.active {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .agent-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 6px;
+        }
+
+        .agent-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        .agent-icon.tech { background: rgba(59, 130, 246, 0.2); }
+        .agent-icon.hr { background: rgba(168, 85, 247, 0.2); }
+        .agent-icon.kb { background: rgba(20, 184, 166, 0.2); }
+
+        .agent-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .agent-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .langfuse-section {
+            margin-top: auto;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .langfuse-link {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            background: var(--bg-dark);
+            border-radius: 8px;
+            text-decoration: none;
+            color: var(--text-primary);
+            transition: all 0.2s;
+        }
+
+        .langfuse-link:hover {
+            background: var(--bg-input);
+        }
+
+        .langfuse-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #ff6b6b, #feca57);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Main Chat Area */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .header-subtitle {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(34, 197, 94, 0.1);
+            border-radius: 20px;
+            font-size: 13px;
+            color: var(--success);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Chat Messages */
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .messages {
+            max-width: 800px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .message {
+            display: flex;
+            gap: 16px;
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .avatar.user {
+            background: var(--primary);
+        }
+
+        .avatar.assistant {
+            background: var(--bg-input);
+        }
+
+        .avatar.tech-support { background: rgba(59, 130, 246, 0.3); }
+        .avatar.hr { background: rgba(168, 85, 247, 0.3); }
+        .avatar.knowledge-base { background: rgba(20, 184, 166, 0.3); }
+
+        .message-content {
+            max-width: 600px;
+        }
+
+        .message-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .message-sender {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .message-time {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .agent-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .agent-badge.tech-support { background: rgba(59, 130, 246, 0.2); color: var(--tech-support); }
+        .agent-badge.hr { background: rgba(168, 85, 247, 0.2); color: var(--hr); }
+        .agent-badge.knowledge-base { background: rgba(20, 184, 166, 0.2); color: var(--knowledge); }
+
+        .message-text {
+            background: var(--bg-card);
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .message.user .message-text {
+            background: var(--primary);
+        }
+
+        .trace-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .trace-link:hover {
+            color: var(--primary);
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 20px 24px;
+            border-top: 1px solid var(--border);
+        }
+
+        .input-container {
+            max-width: 800px;
+            margin: 0 auto;
+            display: flex;
+            gap: 12px;
+        }
+
+        .input-wrapper {
+            flex: 1;
+            position: relative;
+        }
+
+        #messageInput {
+            width: 100%;
+            padding: 16px 20px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #messageInput:focus {
+            border-color: var(--primary);
+        }
+
+        #messageInput::placeholder {
+            color: var(--text-muted);
+        }
+
+        #sendButton {
+            padding: 16px 24px;
+            background: var(--primary);
+            border: none;
+            border-radius: 12px;
+            color: white;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #sendButton:hover {
+            background: var(--primary-dark);
+        }
+
+        #sendButton:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .typing-indicator {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 16px;
+            background: var(--bg-card);
+            border-radius: 12px;
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        .typing-indicator.show {
+            display: flex;
+        }
+
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+        }
+
+        .typing-dots span {
+            width: 8px;
+            height: 8px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-6px); }
+        }
+
+        /* Welcome Message */
+        .welcome {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .welcome-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 20px;
+            margin: 0 auto 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+        }
+
+        .welcome h2 {
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+
+        .welcome p {
+            color: var(--text-muted);
+            max-width: 400px;
+            margin: 0 auto 32px;
+        }
+
+        .quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .quick-action {
+            padding: 12px 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .quick-action:hover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="logo">
+            <div class="logo-icon">🤖</div>
+            <div>
+                <div class="logo-text">Enterprise AI</div>
+                <div class="logo-subtitle">Powered by AgentGateway</div>
+            </div>
+        </div>
+
+        <div class="section-title">Available Agents</div>
+        <div class="agents-list" id="agentsList">
+            <div class="agent-card" data-agent="tech-support">
+                <div class="agent-header">
+                    <div class="agent-icon tech">🔧</div>
+                    <div class="agent-name">Tech Support</div>
+                </div>
+                <div class="agent-desc">IT issues, VPN, passwords, software</div>
+            </div>
+            <div class="agent-card" data-agent="hr">
+                <div class="agent-header">
+                    <div class="agent-icon hr">👥</div>
+                    <div class="agent-name">HR Assistant</div>
+                </div>
+                <div class="agent-desc">Benefits, PTO, policies, onboarding</div>
+            </div>
+            <div class="agent-card" data-agent="knowledge-base">
+                <div class="agent-header">
+                    <div class="agent-icon kb">📚</div>
+                    <div class="agent-name">Knowledge Base</div>
+                </div>
+                <div class="agent-desc">Company info, procedures, FAQs</div>
+            </div>
+        </div>
+
+        <div class="langfuse-section">
+            <div class="section-title">Observability</div>
+            <a href="https://cloud.langfuse.com" target="_blank" class="langfuse-link">
+                <div class="langfuse-icon">📊</div>
+                <div>
+                    <div style="font-weight: 600; font-size: 14px;">Langfuse Dashboard</div>
+                    <div style="font-size: 12px; color: var(--text-muted);">View traces & analytics</div>
+                </div>
+            </a>
+        </div>
+    </aside>
+
+    <main class="main">
+        <header class="header">
+            <div>
+                <div class="header-title">Enterprise AI Assistant</div>
+                <div class="header-subtitle">Ask anything - I'll route to the right specialist</div>
+            </div>
+            <div class="status-badge">
+                <span class="status-dot"></span>
+                <span>Connected</span>
+            </div>
+        </header>
+
+        <div class="chat-container">
+            <div class="messages" id="messages">
+                <div class="welcome">
+                    <div class="welcome-icon">💬</div>
+                    <h2>How can I help you today?</h2>
+                    <p>I'm your enterprise AI assistant. Ask me about IT issues, HR policies, or company information.</p>
+                    <div class="quick-actions">
+                        <button class="quick-action" onclick="sendQuickMessage('My VPN is not connecting')">🔧 VPN Issues</button>
+                        <button class="quick-action" onclick="sendQuickMessage('How many vacation days do I have?')">📅 PTO Balance</button>
+                        <button class="quick-action" onclick="sendQuickMessage('Where is the NYC office?')">🏢 Office Location</button>
+                        <button class="quick-action" onclick="sendQuickMessage('How do I reset my password?')">🔑 Password Reset</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <input type="text" id="messageInput" placeholder="Type your message..." autocomplete="off">
+                </div>
+                <button id="sendButton" onclick="sendMessage()">
+                    Send
+                    <span>→</span>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const API_URL = '/api';
+        const LANGFUSE_URL = 'https://cloud.langfuse.com';
+        let isWelcomeVisible = true;
+
+        // Agent icons and colors
+        const agentConfig = {
+            'tech-support': { icon: '🔧', name: 'Tech Support', class: 'tech-support' },
+            'hr': { icon: '👥', name: 'HR Assistant', class: 'hr' },
+            'knowledge-base': { icon: '📚', name: 'Knowledge Base', class: 'knowledge-base' }
+        };
+
+        function formatTime() {
+            return new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function hideWelcome() {
+            if (isWelcomeVisible) {
+                const welcome = document.querySelector('.welcome');
+                if (welcome) welcome.remove();
+                isWelcomeVisible = false;
+            }
+        }
+
+        function addMessage(text, isUser, agentInfo = null, traceId = null) {
+            hideWelcome();
+            const messages = document.getElementById('messages');
+            const agent = agentInfo ? agentConfig[agentInfo] || agentConfig['knowledge-base'] : null;
+
+            const messageHtml = `
+                <div class="message ${isUser ? 'user' : 'assistant'}">
+                    <div class="avatar ${isUser ? 'user' : (agent ? agent.class : 'assistant')}">
+                        ${isUser ? '👤' : (agent ? agent.icon : '🤖')}
+                    </div>
+                    <div class="message-content">
+                        <div class="message-header">
+                            <span class="message-sender">${isUser ? 'You' : (agent ? agent.name : 'Assistant')}</span>
+                            <span class="message-time">${formatTime()}</span>
+                            ${!isUser && agent ? `<span class="agent-badge ${agent.class}">${agent.name}</span>` : ''}
+                        </div>
+                        <div class="message-text">${text}</div>
+                        ${traceId ? `
+                            <a href="${LANGFUSE_URL}/trace/${traceId}" target="_blank" class="trace-link">
+                                📊 View trace in Langfuse
+                            </a>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+
+            messages.insertAdjacentHTML('beforeend', messageHtml);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function showTyping() {
+            hideWelcome();
+            const messages = document.getElementById('messages');
+            const typingHtml = `
+                <div class="message assistant" id="typingIndicator">
+                    <div class="avatar assistant">🤖</div>
+                    <div class="typing-indicator show">
+                        <div class="typing-dots">
+                            <span></span><span></span><span></span>
+                        </div>
+                        <span>AI is thinking...</span>
+                    </div>
+                </div>
+            `;
+            messages.insertAdjacentHTML('beforeend', typingHtml);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function hideTyping() {
+            const typing = document.getElementById('typingIndicator');
+            if (typing) typing.remove();
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const button = document.getElementById('sendButton');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            // Disable input
+            input.value = '';
+            button.disabled = true;
+
+            // Add user message
+            addMessage(message, true);
+
+            // Show typing indicator
+            showTyping();
+
+            try {
+                const response = await fetch(`${API_URL}/ask`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+
+                const data = await response.json();
+                hideTyping();
+
+                if (data.error) {
+                    addMessage(`Error: ${data.error}`, false);
+                } else {
+                    addMessage(
+                        data.response,
+                        false,
+                        data.routed_to?.agent,
+                        data.trace_id
+                    );
+
+                    // Highlight active agent in sidebar
+                    document.querySelectorAll('.agent-card').forEach(card => {
+                        card.classList.toggle('active', card.dataset.agent === data.routed_to?.agent);
+                    });
+                }
+            } catch (error) {
+                hideTyping();
+                addMessage(`Connection error: ${error.message}`, false);
+            }
+
+            button.disabled = false;
+            input.focus();
+        }
+
+        function sendQuickMessage(message) {
+            document.getElementById('messageInput').value = message;
+            sendMessage();
+        }
+
+        // Enter key to send
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        // Agent card click - direct message
+        document.querySelectorAll('.agent-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const agent = card.dataset.agent;
+                const prompts = {
+                    'tech-support': 'I need help with a technical issue',
+                    'hr': 'I have a question about HR policies',
+                    'knowledge-base': 'I need information about the company'
+                };
+                document.getElementById('messageInput').value = prompts[agent];
+                document.getElementById('messageInput').focus();
+            });
+        });
+    </script>
+</body>
+</html>
