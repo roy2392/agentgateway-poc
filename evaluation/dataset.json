@@ -1,0 +1,160 @@
+{
+  "name": "enterprise-helpdesk-eval",
+  "description": "Evaluation dataset for Enterprise AI Help Desk agents",
+  "items": [
+    {
+      "id": "tech-001",
+      "category": "tech-support",
+      "input": "My VPN keeps disconnecting every few minutes",
+      "expected_agent": "tech-support",
+      "expected_topics": ["vpn", "connectivity", "troubleshooting"],
+      "quality_criteria": "Should provide step-by-step troubleshooting steps for VPN issues"
+    },
+    {
+      "id": "tech-002",
+      "category": "tech-support",
+      "input": "I forgot my password and can't log into my laptop",
+      "expected_agent": "tech-support",
+      "expected_topics": ["password", "reset", "access"],
+      "quality_criteria": "Should guide user to password reset process or SSO portal"
+    },
+    {
+      "id": "tech-003",
+      "category": "tech-support",
+      "input": "Outlook is not syncing my emails",
+      "expected_agent": "tech-support",
+      "expected_topics": ["email", "outlook", "sync"],
+      "quality_criteria": "Should provide troubleshooting for email sync issues"
+    },
+    {
+      "id": "tech-004",
+      "category": "tech-support",
+      "input": "My laptop is extremely slow and takes forever to boot",
+      "expected_agent": "tech-support",
+      "expected_topics": ["performance", "slow", "boot"],
+      "quality_criteria": "Should suggest performance optimization steps"
+    },
+    {
+      "id": "tech-005",
+      "category": "tech-support",
+      "input": "I can't connect to the office WiFi network",
+      "expected_agent": "tech-support",
+      "expected_topics": ["wifi", "network", "connectivity"],
+      "quality_criteria": "Should provide WiFi troubleshooting steps"
+    },
+    {
+      "id": "hr-001",
+      "category": "hr",
+      "input": "How many vacation days do I get after 3 years at the company?",
+      "expected_agent": "hr",
+      "expected_topics": ["pto", "vacation", "policy"],
+      "quality_criteria": "Should correctly state 20 days for 3-5 years tenure",
+      "expected_answer_contains": "20"
+    },
+    {
+      "id": "hr-002",
+      "category": "hr",
+      "input": "What is the 401k match policy?",
+      "expected_agent": "hr",
+      "expected_topics": ["401k", "benefits", "retirement"],
+      "quality_criteria": "Should mention 4% match",
+      "expected_answer_contains": "4%"
+    },
+    {
+      "id": "hr-003",
+      "category": "hr",
+      "input": "How many sick days do I have per year?",
+      "expected_agent": "hr",
+      "expected_topics": ["sick leave", "health", "policy"],
+      "quality_criteria": "Should correctly state 10 sick days per year",
+      "expected_answer_contains": "10"
+    },
+    {
+      "id": "hr-004",
+      "category": "hr",
+      "input": "What is the remote work policy?",
+      "expected_agent": "hr",
+      "expected_topics": ["remote", "hybrid", "work from home"],
+      "quality_criteria": "Should explain hybrid policy - 3 days office, 2 days remote",
+      "expected_answer_contains": ["3", "2"]
+    },
+    {
+      "id": "hr-005",
+      "category": "hr",
+      "input": "Is there an employee referral bonus?",
+      "expected_agent": "hr",
+      "expected_topics": ["referral", "bonus", "hiring"],
+      "quality_criteria": "Should mention $2,000 referral bonus",
+      "expected_answer_contains": "2,000"
+    },
+    {
+      "id": "kb-001",
+      "category": "knowledge-base",
+      "input": "Where is the New York office located?",
+      "expected_agent": "knowledge-base",
+      "expected_topics": ["office", "location", "address"],
+      "quality_criteria": "Should provide correct address: 200 Park Avenue",
+      "expected_answer_contains": "200 Park Avenue"
+    },
+    {
+      "id": "kb-002",
+      "category": "knowledge-base",
+      "input": "How do I submit an expense report?",
+      "expected_agent": "knowledge-base",
+      "expected_topics": ["expense", "report", "process"],
+      "quality_criteria": "Should mention Concur and 30-day deadline",
+      "expected_answer_contains": ["Concur", "30"]
+    },
+    {
+      "id": "kb-003",
+      "category": "knowledge-base",
+      "input": "Who is the CEO of the company?",
+      "expected_agent": "knowledge-base",
+      "expected_topics": ["ceo", "leadership", "executive"],
+      "quality_criteria": "Should correctly identify Jane Smith as CEO",
+      "expected_answer_contains": "Jane Smith"
+    },
+    {
+      "id": "kb-004",
+      "category": "knowledge-base",
+      "input": "How do I book a conference room?",
+      "expected_agent": "knowledge-base",
+      "expected_topics": ["meeting", "room", "booking"],
+      "quality_criteria": "Should mention Outlook or Robin app",
+      "expected_answer_contains": ["Outlook", "Robin"]
+    },
+    {
+      "id": "kb-005",
+      "category": "knowledge-base",
+      "input": "What project management tool does the company use?",
+      "expected_agent": "knowledge-base",
+      "expected_topics": ["tools", "project", "management"],
+      "quality_criteria": "Should mention Jira",
+      "expected_answer_contains": "Jira"
+    },
+    {
+      "id": "edge-001",
+      "category": "edge-case",
+      "input": "I need help with my benefits AND my laptop is slow",
+      "expected_agent": "any",
+      "expected_topics": ["mixed", "multi-domain"],
+      "quality_criteria": "Should handle mixed query gracefully, possibly routing to one agent first"
+    },
+    {
+      "id": "edge-002",
+      "category": "edge-case",
+      "input": "Hello, how are you today?",
+      "expected_agent": "any",
+      "expected_topics": ["greeting", "small-talk"],
+      "quality_criteria": "Should respond politely and ask how to help"
+    },
+    {
+      "id": "edge-003",
+      "category": "edge-case",
+      "input": "What's the weather like?",
+      "expected_agent": "any",
+      "expected_topics": ["out-of-scope"],
+      "quality_criteria": "Should politely redirect to help desk topics or acknowledge limitation"
+    }
+  ]
+}
